@@ -13,7 +13,7 @@ the files are served as they are, and `api/` holds the serverless functions.
 | `css/style.css` | Layout, the board and the pieces. Board and piece colours are tokens at the top. |
 | `js/` | ES modules, below. |
 | `api/` | The leaderboard API, below. |
-| `images/` | Manifest screenshots. Still the template's; replace them with real ones. |
+| `images/` | Manifest screenshots, at the sizes `manifest.json` gives. |
 
 ## js
 
