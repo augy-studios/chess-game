@@ -22,11 +22,14 @@ const OVER_SLACK_MS = 60000;
 const COMPUTER_MOVE_MS = 5000;
 
 export function readMoves(value) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PLIES) {
-    throw new HttpError(400, "bad_moves");
+  if (Array.isArray(value) && value.length === 0) {
+    throw new HttpError(400, "no_moves", "A game needs at least one move to go on the leaderboard.");
+  }
+  if (!Array.isArray(value) || value.length > MAX_PLIES) {
+    throw new HttpError(400, "bad_moves", "Those moves could not be read.");
   }
   if (!value.every((m) => typeof m === "string" && /^(?:[a-h][1-8][a-h][1-8][qrbn]?|O-O|O-O-O)$/.test(m))) {
-    throw new HttpError(400, "bad_moves");
+    throw new HttpError(400, "bad_moves", "Those moves could not be read.");
   }
   return value;
 }

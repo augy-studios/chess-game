@@ -243,6 +243,7 @@ export function startGame(opts) {
     ticket: opts.ticket ?? (opts.mode === "local" || opts.role === "guest" ? "none" : "pending"),
     serverSeed: opts.serverSeed ?? false,
     submitted: opts.submitted ?? false,
+    submittedText: opts.submittedText ?? null,
     time: opts.time ?? null,
     clock: opts.clock ?? newClock(now),
     startedAt: opts.startedAt ?? now,
@@ -843,7 +844,7 @@ function wireEnd(end) {
 // Tells the server the game is over, the moment it is, so its clock stops
 // there. Tried again when the connection comes back.
 async function reportFinish(game) {
-  if (!game.gameId || game.finishSent || game !== g || !isOver()) return;
+  if (!game.gameId || game.finishSent || game !== g || !isOver() || !game.moves.length) return;
   game.finishSent = true;
   try {
     const r = await api.finish({ game_id: game.gameId, moves: game.moves, end: wireEnd(game.end) });
@@ -866,10 +867,11 @@ async function reportFinish(game) {
 // host's next snapshot. Either player then gets the form as soon as it does.
 function renderSubmit() {
   reportFinish(g);
-  const canSubmit = Boolean(scoring() && g.gameId && !g.submitted);
+  const canSubmit = Boolean(scoring() && g.gameId && !g.submitted && g.moves.length);
   $("submitForm").classList.toggle("hidden", !canSubmit || g.submitRefused);
   let why = "";
   if (g.mode === "local") why = "Games on one device are not scored.";
+  else if (!g.moves.length) why = "A game needs at least one move to go on the leaderboard.";
   else if (!g.gameId) {
     why =
       g.ticket === "pending"
@@ -880,6 +882,9 @@ function renderSubmit() {
   }
   $("notScored").textContent = why;
   $("notScored").classList.toggle("hidden", !why);
+  // Saved with the game, so a reload shows it again rather than an empty
+  // box with a tick in it. Games saved before it was kept get the short form.
+  $("submittedText").textContent = g.submittedText || "This game is on the leaderboard.";
   $("submitted").classList.toggle("hidden", !g.submitted);
 
   const s = getSettings();
@@ -912,9 +917,11 @@ async function submitAs(name, auto = false) {
     renderScoreLine();
     const games = r.games === 1 ? "1 game" : `${r.games} games`;
     const bonus = r.time_bonus ? `, with +${r.time_bonus}% for time` : "";
-    $("submittedText").textContent =
+    g.submittedText =
       `Added as ${r.name} for ${r.score} points${bonus}. Best ${r.best_score}, ranked ${r.rank}. ` +
       `Total ${r.total} over ${games}, ranked ${r.total_rank}.`;
+    persist();
+    $("submittedText").textContent = g.submittedText;
     $("submitForm").classList.add("hidden");
     $("submitted").classList.remove("hidden");
     msg.textContent = "";
@@ -1154,6 +1161,7 @@ function persist() {
     ticket: g.ticket === "pending" ? "offline" : g.ticket,
     serverSeed: g.serverSeed,
     submitted: g.submitted,
+    submittedText: g.submittedText ?? null,
     time: g.time,
     clock: g.clock,
     startedAt: g.startedAt,
@@ -1194,6 +1202,7 @@ function resume() {
     ticket: saved.gameId ? "ok" : saved.mode === "local" ? "none" : "offline",
     serverSeed: saved.serverSeed === true,
     submitted: saved.submitted === true,
+    submittedText: typeof saved.submittedText === "string" ? saved.submittedText : null,
     time: time && clock ? time : null,
     clock: time && clock ? clock : undefined,
     startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt : Date.now(),
