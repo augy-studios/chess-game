@@ -769,6 +769,16 @@ body {
 }
 .round-actions .btn { padding: 9px 16px; }
 
+/* Confetti for a win, over everything and never in the way. */
+.confetti {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 70;
+  pointer-events: none;
+}
+
 /* Settings modal. */
 .modal .hidden { display: none !important; }
 .saved-name {

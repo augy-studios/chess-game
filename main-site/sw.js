@@ -36,7 +36,7 @@
 // 5. The computer's Web Worker (js/ai-worker.js) is precached like any other
 //    module, so the computer plays offline.
 
-const VERSION = "uwuchess-v6";
+const VERSION = "uwuchess-v7";
 
 const SHELL = `uwuchess-shell-${VERSION}`;
 
@@ -66,6 +66,7 @@ const PRECACHE = [
   "/js/chess.js",
   "/js/clock.js",
   "/js/computer.js",
+  "/js/confetti.js",
   "/js/game.js",
   "/js/icons.js",
   "/js/leaderboard.js",

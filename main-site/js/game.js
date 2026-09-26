@@ -33,6 +33,7 @@ import { openLeaderboard } from "./leaderboard.js";
 import { typeSvg } from "./pieces.js";
 import { Replay } from "./replay.js";
 import { copyText, hydrateIcons, store } from "./ui.js";
+import { confetti } from "./confetti.js";
 
 const GAME_STORAGE = "uwuchess.game";
 const SETUP_STORAGE = "uwuchess.setup";
@@ -833,6 +834,11 @@ function finish(fresh) {
   hydrateIcons($("play"));
   replayer.load(g.seed, g.moves, { orientation: orientation(), coords: s.coords }, { autoplay: !fresh && s.auto_replay });
   if (!fresh) $("resultTitle").focus({ preventScroll: true });
+
+  // A win as it happens, not on a reload of one. On a shared device somebody
+  // at the screen has always won unless it was a draw.
+  const won = g.mode === "local" ? o.winner !== -1 : result === "win";
+  if (won && !fresh) confetti();
 }
 
 // An end claim as the API takes it: sides as "w" or "b".
