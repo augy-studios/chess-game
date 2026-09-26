@@ -4,9 +4,13 @@
 
 import { moveMarks } from "./board.js";
 import { positions, replay as replayGame } from "./record.js";
-import { escapeHtml, hydrateIcons } from "./ui.js";
+import { escapeHtml, hydrateIcons, store } from "./ui.js";
 
+// A move every 900 ms at 1x. The slide itself takes 200 ms, so even 4x
+// (225 ms a move) still shows each piece travel.
 const STEP_MS = 900;
+const SPEEDS = [0.5, 1, 2, 4];
+const SPEED_STORAGE = "uwuchess.replaySpeed";
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,7 +25,14 @@ export class Replay {
     this.frames = [];
     this.marks = [];
     this.view = {};
+    const saved = Number(store.get(SPEED_STORAGE));
+    this.speed = SPEEDS.includes(saved) ? saved : 1;
+    this.syncSpeed();
 
+    $("rpSpeed").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-speed]");
+      if (btn) this.setSpeed(Number(btn.dataset.speed));
+    });
     $("rpStart").addEventListener("click", () => this.jump(0));
     $("rpBack").addEventListener("click", () => this.step(-1));
     $("rpForward").addEventListener("click", () => this.step(1));
@@ -128,6 +139,29 @@ export class Replay {
     else this.show(target, null);
   }
 
+  get stepMs() {
+    return STEP_MS / this.speed;
+  }
+
+  // Remembered in this browser. A replay that is playing picks the new pace
+  // up from its next move, without restarting.
+  setSpeed(speed) {
+    if (!SPEEDS.includes(speed)) return;
+    this.speed = speed;
+    store.set(SPEED_STORAGE, String(speed));
+    this.syncSpeed();
+    if (this.timer && this.ticking) {
+      clearTimeout(this.timer);
+      this.timer = setTimeout(this.ticking, this.stepMs);
+    }
+  }
+
+  syncSpeed() {
+    document.querySelectorAll("#rpSpeed [data-speed]").forEach((el) => {
+      el.setAttribute("aria-checked", String(Number(el.dataset.speed) === this.speed));
+    });
+  }
+
   play() {
     clearTimeout(this.timer);
     // Played to the end already: start over.
@@ -138,14 +172,16 @@ export class Replay {
         this.pause();
         return;
       }
-      this.timer = setTimeout(tick, STEP_MS);
+      this.timer = setTimeout(tick, this.stepMs);
     };
-    this.timer = setTimeout(tick, this.index === 0 ? 400 : STEP_MS / 2);
+    this.ticking = tick;
+    this.timer = setTimeout(tick, this.index === 0 ? Math.min(400, this.stepMs) : this.stepMs / 2);
   }
 
   pause() {
     clearTimeout(this.timer);
     this.timer = null;
+    this.ticking = null;
     this.syncPlayButton(false);
   }
 

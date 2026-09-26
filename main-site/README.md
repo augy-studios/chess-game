@@ -78,7 +78,18 @@ percentage.
 
 **Replay.** When a game ends it plays back on the board by itself (a setting
 turns this off), with play, pause, a step back or forward, a slider and the
-move list.
+move list. It plays at 0.5x, 1x, 2x or 4x, remembered in this browser.
+
+**Sharing a replay.** Share replay, on any finished game, makes a link such
+as `/?watch=BAcRBREE&seed=960-G8QV-VN4T&game=c3w&resign=w`, through the
+device's share sheet where it has one and the clipboard otherwise. The link
+is the whole game: the seed, each move packed as one byte (its place in the
+position's list of legal moves), who played, and a resignation. Nothing is
+stored anywhere, and a link opens offline once the site has been visited.
+Opening one plays the replay without touching the viewer's own saved game;
+Close replay goes back to it, and Play this seed fills in the new-game
+screen. A shared replay shows no score, since a link can be edited and only
+the leaderboard's scores are checked.
 
 **Scoring.** The score grows with the game, from the side's own moves:
 

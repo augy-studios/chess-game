@@ -7,7 +7,7 @@
 
 import { WHITE, BLACK } from "./chess.js";
 import { BoardView, moveMarks } from "./board.js";
-import { replay as replayGame } from "./record.js";
+import { replay as replayGame, packMoves, unpackMoves } from "./record.js";
 import { newSeed, parseSeed } from "./seed.js";
 import { LEVELS } from "./ai.js";
 import { requestMove, cancelMove } from "./computer.js";
@@ -36,6 +36,7 @@ let gameCounter = 0;
 let resignTimer = null;
 let leaveTimer = null;
 let net = null; // set by multiplayer.js for network games
+let watching = null; // a shared replay being watched: { seed, moves, resigned, meta }
 
 /* ---- setup ---- */
 
@@ -120,6 +121,7 @@ export function startGame(opts) {
   cancelMove();
   thinking = false;
   replayer.stop();
+  if (watching) closeWatch({ show: false });
   const sideChoice = opts.sideChoice ?? null;
   g = {
     id: ++gameCounter,
@@ -409,7 +411,9 @@ function update({ animate = null, fresh = false } = {}) {
   if (over && !g.wasOver) {
     g.wasOver = true;
     finish(fresh);
-  } else if (!over) {
+  } else if (over) {
+    renderSubmit();
+  } else {
     g.wasOver = false;
     board.set({
       pos: rec.pos,
@@ -476,7 +480,10 @@ function renderStatus(over) {
 }
 
 function renderActions(over) {
-  $("liveActions").classList.toggle("hidden", over && g.submitted);
+  // A submitted game cannot be undone. A network game keeps the row anyway,
+  // for its way out of the session.
+  $("liveActions").classList.toggle("hidden", over && g.submitted && g.mode !== "network");
+  $("undoBtn").classList.toggle("hidden", g.submitted);
   $("undoBtn").disabled = !canUndo();
   $("undoLabel").textContent = g.mode === "network" ? "Ask to undo" : "Undo";
   $("resignBtn").classList.toggle("hidden", over);
@@ -531,6 +538,8 @@ const REASONS = {
 };
 
 function resetResult() {
+  // A takeback reopens the game, and its next ending gets a fresh try.
+  if (g) g.submitRefused = false;
   $("result").classList.add("hidden");
   $("replayBar").classList.add("hidden");
   $("submitted").classList.add("hidden");
@@ -554,11 +563,33 @@ function finish(fresh) {
   $("resultScore").textContent = scoring() ? `${score} ${score === 1 ? "point" : "points"}${g.undos[me] ? `, after ${g.undos[me]} undo${g.undos[me] === 1 ? "" : "s"}` : ""}.` : "";
   $("resultSeed").textContent = `Seed ${g.seed.text}`;
   $("copySeedLabel").textContent = "Copy seed";
+  $("shareLabel").textContent = "Share replay";
 
-  const canSubmit = scoring() && g.gameId && !g.submitted;
-  $("submitForm").classList.toggle("hidden", !canSubmit);
   $("nameInput").value = s.name ?? "";
   $("submitBtn").disabled = false;
+  g.autoTried = fresh;
+  renderSubmit();
+
+  const guest = g.mode === "network" && g.role === "guest";
+  $("againBtn").classList.toggle("hidden", guest);
+  $("againLabel").textContent = g.mode === "network" ? "Next game" : "Play again";
+  $("newGameBtn").classList.toggle("hidden", g.mode === "network");
+  $("newGameLabel").textContent = "New game";
+
+  $("result").classList.remove("hidden");
+  $("replayBar").classList.remove("hidden");
+  hydrateIcons($("play"));
+  replayer.load(g.seed, g.moves, { orientation: orientation(), coords: s.coords }, { autoplay: !fresh && s.auto_replay });
+  if (!fresh) $("resultTitle").focus({ preventScroll: true });
+}
+
+// The leaderboard part of the result. Redrawn on every update while the game
+// is over, because the start ticket can arrive after the game has ended: the
+// host's check-in can be slow, and the guest only learns of it from the
+// host's next snapshot. Either player then gets the form as soon as it does.
+function renderSubmit() {
+  const canSubmit = Boolean(scoring() && g.gameId && !g.submitted);
+  $("submitForm").classList.toggle("hidden", !canSubmit || g.submitRefused);
   let why = "";
   if (g.mode === "local") why = "Games on one device are not scored.";
   else if (!g.gameId) {
@@ -573,18 +604,11 @@ function finish(fresh) {
   $("notScored").classList.toggle("hidden", !why);
   $("submitted").classList.toggle("hidden", !g.submitted);
 
-  const guest = g.mode === "network" && g.role === "guest";
-  $("againBtn").classList.toggle("hidden", guest);
-  $("againLabel").textContent = g.mode === "network" ? "Next game" : "Play again";
-  $("newGameBtn").classList.toggle("hidden", g.mode === "network");
-
-  $("result").classList.remove("hidden");
-  $("replayBar").classList.remove("hidden");
-  hydrateIcons($("play"));
-  replayer.load(g.seed, g.moves, { orientation: orientation(), coords: s.coords }, { autoplay: !fresh && s.auto_replay });
-  if (!fresh) $("resultTitle").focus({ preventScroll: true });
-
-  if (canSubmit && s.auto_submit && s.name && !fresh) submitAs(s.name, true);
+  const s = getSettings();
+  if (canSubmit && !g.autoTried && s.auto_submit && s.name) {
+    g.autoTried = true;
+    submitAs(s.name, true);
+  }
 }
 
 async function submitAs(name, auto = false) {
@@ -620,8 +644,10 @@ async function submitAs(name, auto = false) {
     else if (auto && err.status === 400) msg.textContent = "Your saved name was refused, so this game was not added. Change it in Settings.";
     else msg.textContent = err.message || "That did not go through. Try again in a moment.";
     const final = ["already_submitted", "expired", "too_fast", "overlap", "seed_used", "not_yours", "same_device", "not_computer", "illegal", "mismatch"];
-    if (final.includes(err.code)) $("submitForm").classList.add("hidden");
-    else $("submitBtn").disabled = false;
+    if (final.includes(err.code)) {
+      g.submitRefused = true;
+      $("submitForm").classList.add("hidden");
+    } else $("submitBtn").disabled = false;
   }
 }
 
@@ -636,7 +662,162 @@ function onSubmit(event) {
   submitAs(name);
 }
 
+/* ---- sharing a replay ----
+   A replay link holds the whole game: the seed, the moves packed one byte
+   each (record.js), who played, and a resignation. Nothing is stored
+   anywhere, so a link works for as long as the site does, offline too. It
+   carries no score: anyone can edit a link, and only the leaderboard's
+   score is checked. */
+
+// "c3w": against the computer at level 3, the player White. "l": two
+// people on one device. "n": a network game.
+function metaFor(game) {
+  if (game.mode === "computer") return `c${game.level}${SIDE_LETTER[game.firstSide]}`;
+  return game.mode === "network" ? "n" : "l";
+}
+
+function readMeta(text) {
+  const m = /^(?:c([1-5])([wb])|(l)|(n))$/.exec(text ?? "");
+  if (!m) return { mode: "local" };
+  if (m[1]) return { mode: "computer", level: Number(m[1]), side: m[2] === "w" ? WHITE : BLACK };
+  return { mode: m[3] ? "local" : "network" };
+}
+
+function replayLink(seed, moves, resigned, meta) {
+  const params = new URLSearchParams({ watch: packMoves(seed, moves), seed: seed.text, game: meta });
+  if (resigned !== null) params.set("resign", SIDE_LETTER[resigned]);
+  return `${location.origin}/?${params}`;
+}
+
+async function onShare() {
+  const src = watching ?? (g && { seed: g.seed, moves: g.moves, resigned: g.resigned, meta: metaFor(g) });
+  if (!src) return;
+  const url = replayLink(src.seed, src.moves, src.resigned, src.meta);
+  const label = $("shareLabel");
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Chess Game replay", text: `Watch this game of chess, seed ${src.seed.text}.`, url });
+      label.textContent = "Shared";
+      return;
+    } catch (err) {
+      // Dismissed: nothing to say. Refused or unsupported here: copy instead.
+      if (err?.name === "AbortError") return;
+    }
+  }
+  label.textContent = (await copyText(url)) ? "Link copied" : "Copy failed";
+}
+
+// Reads a replay link's parameters. Returns what to watch, { damaged: true }
+// if the link is broken, or null if this is not a replay link.
+export function readReplayLink(params) {
+  if (!params.has("watch")) return null;
+  const seed = parseSeed(params.get("seed"));
+  const moves = seed && unpackMoves(seed, params.get("watch"));
+  if (!moves) return { damaged: true };
+  const r = params.get("resign");
+  const resigned = r === "w" ? WHITE : r === "b" ? BLACK : null;
+  return { seed, moves, resigned, meta: params.get("game") ?? "l" };
+}
+
+function watch(link) {
+  cancelMove();
+  thinking = false;
+  g = null;
+  watching = link;
+  const meta = readMeta(link.meta);
+  const record = replayGame(link.seed, link.moves);
+  // A resignation only stands if the game had not already ended.
+  const resigned = record.outcome ? null : link.resigned;
+  watching.resigned = resigned;
+  const o =
+    resigned !== null
+      ? { reason: "resign", winner: resigned ^ 1 }
+      : record.outcome ?? { reason: "unfinished", winner: -1 };
+
+  showPanel("play");
+  resetResult();
+  for (const id of ["liveActions", "netBar", "takeback", "submitForm", "notScored", "submitted"]) $(id).classList.add("hidden");
+  $("undoNote").textContent = "";
+  $("status").dataset.last = "";
+  $("status").textContent = "A shared replay.";
+  $("turnChip").textContent = "Replay";
+  $("scoreChip").textContent = "";
+  $("seedChip").textContent = link.seed.text;
+
+  const who = (side) => {
+    if (meta.mode === "computer") return side === meta.side ? `Player, ${SIDE_NAME[side]}` : `Computer, ${LEVELS[meta.level].name}`;
+    return SIDE_NAME[side];
+  };
+  const bottom = meta.mode === "computer" ? meta.side : WHITE;
+  $("bottomName").textContent = who(bottom);
+  $("topName").textContent = who(bottom ^ 1);
+  $("bottomCaptured").innerHTML = "";
+  $("topCaptured").innerHTML = "";
+
+  if (o.reason === "unfinished") $("resultTitle").textContent = "Unfinished game";
+  else if (o.winner === -1) $("resultTitle").textContent = "Draw";
+  else if (meta.mode === "computer") $("resultTitle").textContent = o.winner === meta.side ? "The player won" : "The computer won";
+  else $("resultTitle").textContent = `${SIDE_NAME[o.winner]} won`;
+  $("resultReason").textContent =
+    o.reason === "resign" ? `${SIDE_NAME[resigned]} resigned.` : o.reason === "unfinished" ? "The game stops here." : REASONS[o.reason];
+  $("resultScore").textContent =
+    meta.mode === "computer"
+      ? `Against the computer at ${LEVELS[meta.level].name} level.`
+      : meta.mode === "network"
+        ? "Played over the network."
+        : "Two players on one device.";
+  $("resultSeed").textContent = `Seed ${link.seed.text}`;
+  $("copySeedLabel").textContent = "Copy seed";
+  $("shareLabel").textContent = "Share replay";
+  $("againBtn").classList.remove("hidden");
+  $("againLabel").textContent = "Play this seed";
+  $("newGameBtn").classList.remove("hidden");
+  $("newGameLabel").textContent = "Close replay";
+
+  $("result").classList.remove("hidden");
+  $("replayBar").classList.remove("hidden");
+  hydrateIcons($("play"));
+  replayer.load(link.seed, link.moves, { orientation: bottom, coords: getSettings().coords }, { autoplay: true });
+}
+
+// Leaves a shared replay: the address loses the link, and the page goes
+// back to the game this browser had going, or to choosing one.
+function closeWatch({ show = true } = {}) {
+  watching = null;
+  replayer.stop();
+  const params = new URLSearchParams(location.search);
+  for (const key of ["watch", "seed", "game", "resign"]) params.delete(key);
+  const rest = params.toString();
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+  if (show && !resume()) {
+    showPanel("setup");
+    renderSetup();
+  }
+}
+
+// "Play this seed": the new-game screen with the seed filled in, and the
+// replay's kind of game chosen where it can be.
+function playWatchedSeed() {
+  const { seed, meta: text } = watching;
+  const meta = readMeta(text);
+  closeWatch({ show: false });
+  if (meta.mode === "computer") {
+    setup.mode = "computer";
+    setup.level = meta.level;
+    setup.side = SIDE_LETTER[meta.side];
+  } else if (meta.mode === "local") {
+    setup.mode = "local";
+  }
+  setup.variant = seed.variant;
+  saveSetup();
+  $("seedInput").value = seed.text;
+  showPanel("setup");
+  renderSetup();
+  $("startBtn").focus();
+}
+
 function onAgain() {
+  if (watching) return playWatchedSeed();
   if (!g) return;
   if (g.mode === "network") {
     net?.nextGame();
@@ -810,7 +991,7 @@ function buildLevelPick() {
     .join("");
 }
 
-export function initGame({ joinCode } = {}) {
+export function initGame({ joinCode, replayLink: shared } = {}) {
   board = new BoardView($("board"), { onMove: (text) => onBoardMove(text) });
   replayer = new Replay(board);
   loadSetup();
@@ -876,21 +1057,30 @@ export function initGame({ joinCode } = {}) {
 
   $("submitForm").addEventListener("submit", onSubmit);
   $("againBtn").addEventListener("click", onAgain);
-  $("newGameBtn").addEventListener("click", endGame);
+  $("newGameBtn").addEventListener("click", () => (watching ? closeWatch() : endGame()));
   $("resultBoardBtn").addEventListener("click", () => openLeaderboard());
+  $("shareBtn").addEventListener("click", onShare);
+  const shownSeed = () => (watching ?? g)?.seed;
   $("copySeedBtn").addEventListener("click", async () => {
-    if (!g) return;
-    $("copySeedLabel").textContent = (await copyText(g.seed.text)) ? "Copied" : "Copy failed";
+    const seed = shownSeed();
+    if (!seed) return;
+    $("copySeedLabel").textContent = (await copyText(seed.text)) ? "Copied" : "Copy failed";
   });
   $("seedChip").addEventListener("click", async () => {
-    if (!g) return;
+    const seed = shownSeed();
+    if (!seed) return;
     const chip = $("seedChip");
-    const ok = await copyText(g.seed.text);
-    chip.textContent = ok ? "Seed copied" : g.seed.text;
-    setTimeout(() => g && (chip.textContent = g.seed.text), 1200);
+    const ok = await copyText(seed.text);
+    chip.textContent = ok ? "Seed copied" : seed.text;
+    setTimeout(() => shownSeed() && (chip.textContent = shownSeed().text), 1200);
   });
 
   onSettingsChange(() => {
+    if (watching) {
+      replayer.view.coords = getSettings().coords;
+      replayer.show(replayer.index, null);
+      return;
+    }
     if (!g) return;
     if (isOver()) {
       replayer.view.coords = getSettings().coords;
@@ -899,11 +1089,21 @@ export function initGame({ joinCode } = {}) {
   });
 
   renderSetup();
+  if (shared && !shared.damaged) {
+    watch(shared);
+    return;
+  }
   if (joinCode) {
     setup.mode = "network";
     renderSetup();
     showPanel("setup");
     return;
+  }
+  // A broken replay link is dropped from the address, and said so on the
+  // new-game screen when that is where the page lands.
+  if (shared?.damaged) {
+    closeWatch({ show: false });
+    $("seedNote").textContent = "That replay link is damaged or incomplete, so it cannot be played back.";
   }
   if (!resume()) showPanel("setup");
 }

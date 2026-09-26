@@ -598,6 +598,10 @@ body {
   background: var(--brand-fill);
   color: var(--on-brand);
 }
+.speed-pick {
+  grid-template-columns: repeat(4, 1fr);
+  width: min(100%, 280px);
+}
 .scrub {
   width: 100%;
   accent-color: var(--brand-ink);

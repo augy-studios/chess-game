@@ -62,6 +62,56 @@ export function positions(seed, moves) {
   return out;
 }
 
+/* ---- packing a game into a link ----
+   Each move is stored as its index in the position's list of legal moves,
+   one byte a move, since no position has more than 218. The list's order is
+   fixed by chess.js, so the same bytes always unpack to the same game, and a
+   damaged link cannot unpack to an illegal one: it stops, and says so. */
+
+function toBase64Url(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(text) {
+  if (!/^[A-Za-z0-9_-]*$/.test(text)) return null;
+  try {
+    const bin = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+export function packMoves(seed, moves) {
+  const pos = Position.fromIndex(seed.index);
+  const bytes = [];
+  for (const text of moves) {
+    const legal = pos.moves();
+    const i = legal.findIndex((m) => Position.moveText(m) === text);
+    if (i < 0) break;
+    bytes.push(i);
+    pos.make(legal[i]);
+  }
+  return toBase64Url(bytes);
+}
+
+// The move list a packed string stands for, or null if it is damaged.
+export function unpackMoves(seed, packed) {
+  const bytes = fromBase64Url(packed ?? "");
+  if (!bytes || bytes.length > MAX_PLIES) return null;
+  const pos = Position.fromIndex(seed.index);
+  const moves = [];
+  for (const i of bytes) {
+    const legal = pos.moves();
+    if (i >= legal.length || pos.outcome()) return null;
+    moves.push(Position.moveText(legal[i]));
+    pos.make(legal[i]);
+  }
+  return moves;
+}
+
 // Material each side has taken, for the captured pieces rows.
 export function captures(plies) {
   const taken = [[], []];
