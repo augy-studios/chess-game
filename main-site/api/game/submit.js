@@ -1,14 +1,17 @@
 // POST /api/game/submit
-//   { game_id, client_key, name, side, moves, resigned?, undos? }
-//   -> { name, score, outcome, rank, best_score, total, games, total_rank }
-// side and resigned are "w" or "b". moves is the whole game as stored move
-// text. The score is computed here from the replayed moves; see verify.js
-// for the checks on the game and the SQL function for the rest.
+//   { game_id, client_key, name, side, moves, end?, undos? }
+//   -> { name, score, outcome, time_bonus, elapsed_ms, rank, best_score,
+//        total, games, total_rank }
+// side is "w" or "b". moves is the whole game as stored move text. end is a
+// claim on how it ended, { by: "resign" | "flag", side } or { by: "timeup" }.
+// The score is computed here from the replayed moves and the server's own
+// times; see verify.js for the checks on the game and the SQL functions for
+// the rest.
 
 import { endpoint, HttpError, clientKey, gameId, side as readSide, limit } from "../_lib/http.js";
 import { cleanName } from "../_lib/names.js";
 import { rest, rpc } from "../_lib/supabase.js";
-import { readMoves, verify } from "../_lib/verify.js";
+import { readEnd, readMoves, verify, movesText } from "../_lib/verify.js";
 
 const REFUSALS = {
   not_found: [404, "That game does not exist."],
@@ -29,7 +32,7 @@ export default endpoint("POST", async ({ req, body }) => {
   const name = cleanName(body.name);
   const who = readSide(body.side);
   const moves = readMoves(body.moves);
-  const resigned = body.resigned == null ? null : readSide(body.resigned);
+  const end = readEnd(body.end);
   const reported = Number.isInteger(body.undos) && body.undos >= 0 ? Math.min(body.undos, 10000) : 0;
 
   // Replaying a long game against the Master level is real work, so this
@@ -39,8 +42,14 @@ export default endpoint("POST", async ({ req, body }) => {
   const [game] = (await rest(`uwuchess_games?id=eq.${id}&select=*`)) ?? [];
   if (!game) throw new HttpError(404, "not_found", REFUSALS.not_found[1]);
 
+  // The game's end as the server saw it: when the page reported it, if the
+  // moves then are these moves, and otherwise now.
+  const text = movesText(moves, end);
+  const endedAt = game.finished_at && game.moves === text ? Date.parse(game.finished_at) : Date.now();
+  const elapsed = endedAt - Date.parse(game.created_at);
+
   const recorded = who === 0 ? game.undos_w : game.undos_b;
-  const result = verify(game, moves, who, resigned, Math.max(reported, recorded ?? 0));
+  const result = verify(game, moves, who, end, Math.max(reported, recorded ?? 0), elapsed);
 
   const [row] =
     (await rpc("uwuchess_submit", {
@@ -48,7 +57,7 @@ export default endpoint("POST", async ({ req, body }) => {
       p_side: who,
       p_name: name,
       p_client_key: key,
-      p_moves: moves.join(" ") + (resigned == null ? "" : ` resign:${resigned}`),
+      p_moves: text,
       p_score: result.score,
       p_outcome: result.outcome,
       p_own_moves: result.ownMoves,
@@ -62,6 +71,8 @@ export default endpoint("POST", async ({ req, body }) => {
     name,
     score: result.score,
     outcome: result.outcome,
+    time_bonus: result.timeBonus,
+    elapsed_ms: elapsed,
     rank: Number(row.rank),
     best_score: row.best_score,
     total: Number(row.total),

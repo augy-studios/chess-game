@@ -48,6 +48,47 @@ export function replay(seed, moves) {
   return { pos, plies, error, outcome: error ? null : pos.outcome() };
 }
 
+/* ---- endings off the board ----
+   A game can also end by a claim: a resignation, a player's clock running
+   out ("flag"), or a shared game clock running out ("timeup"). Written
+   { by: "resign" | "flag", side } or { by: "timeup" }. The page, the network
+   snapshot, the replay link and the API all use this one form. */
+
+export function validEnd(end) {
+  if (end === null) return true;
+  if (!end || typeof end !== "object") return false;
+  if (end.by === "timeup") return true;
+  return (end.by === "resign" || end.by === "flag") && (end.side === 0 || end.side === 1);
+}
+
+// What a claim means in a position the board has not already ended.
+export function claimedOutcome(pos, end) {
+  const won = (winner, reason) => ({ result: winner === 0 ? "1-0" : "0-1", reason, winner });
+  const draw = (reason) => ({ result: "1/2-1/2", reason, winner: -1 });
+  if (end.by === "resign") return won(end.side ^ 1, "resign");
+  if (end.by === "flag") {
+    // Out of time loses, unless the other side could never checkmate.
+    return pos.canMate(end.side ^ 1) ? won(end.side ^ 1, "flag") : draw("flag-draw");
+  }
+  // The shared clock: more material wins, level material draws.
+  const lead = pos.material(0) - pos.material(1);
+  return lead === 0 ? draw("timeup") : won(lead > 0 ? 0 : 1, "timeup");
+}
+
+// The game's outcome counting a claim, or null if it goes on. A claim made
+// after the board had already ended the game does not count.
+export function outcomeWith(record, end) {
+  if (record.outcome || !end) return record.outcome;
+  return claimedOutcome(record.pos, end);
+}
+
+// A claim as text, appended to the moves wherever they are stored as one
+// string, so two submissions of one game compare equal only if they agree.
+export function endText(end) {
+  if (!end) return "";
+  return end.by === "timeup" ? " timeup" : ` ${end.by}:${end.side}`;
+}
+
 // Positions after each ply, for stepping through a replay. Index 0 is the
 // start.
 export function positions(seed, moves) {

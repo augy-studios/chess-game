@@ -28,6 +28,7 @@ the browser and the server always agree on a game.
 | `seed.js` | Seeds, and the integer random numbers everything draws from. |
 | `record.js` | Replays a seed and a move list into positions and notation. |
 | `score.js` | Scoring (below). |
+| `clock.js` | Time limits and the clock, as plain data that saves and travels. |
 | `ai-worker.js`, `computer.js` | The computer's Web Worker, and the page's side of it. |
 | `board.js` | The board on screen: tap, drag or keyboard, sliding moves, the grey box on the square a piece left. |
 | `pieces.js` | The pieces, as inline SVG drawn for this app. |
@@ -71,20 +72,31 @@ lets the API replay a game and check every one of the computer's moves.
 the king to its square, the king onto the rook, or the rook onto the king.
 Every move slides, and a grey box stays on the square the piece left.
 
+**Time limits.** None, 1, 3, 5, 10, 15 or 30 minutes, or any whole number
+from 1 to 180, either **each player** (a chess clock: running out loses,
+unless the other side could never checkmate, which is a draw) or **the whole
+game** (one clock for both: when it runs out, more material wins, and level
+material draws). Against the computer only the player's clock runs; its
+thinking time depends on the device. In a network game the host keeps both
+clocks and the guest shows them. Clocks follow the wall clock, so a game left
+open keeps counting.
+
 **Undo.** Unlimited, in every mode. Against the computer it takes back your
 move and its reply. In a network game it asks the other player, who accepts
 or declines. In a scored game each undo costs 40 points before the level
-percentage.
+percentage. It gives no time back.
 
 **Replay.** When a game ends it plays back on the board by itself (a setting
 turns this off), with play, pause, a step back or forward, a slider and the
 move list. It plays at 0.5x, 1x, 2x or 4x, remembered in this browser.
 
 **Sharing a replay.** Share replay, on any finished game, makes a link such
-as `/?watch=BAcRBREE&seed=960-G8QV-VN4T&game=c3w&resign=w`, through the
+as `/?watch=BAcRBREE&seed=960-G8QV-VN4T&game=c3w&end=rw`, through the
 device's share sheet where it has one and the clipboard otherwise. The link
 is the whole game: the seed, each move packed as one byte (its place in the
-position's list of legal moves), who played, and a resignation. Nothing is
+position's list of legal moves), who played, and how it ended if not on the
+board (`rw` White resigned, `fb` Black ran out of time, `t` the game clock
+ran out). Nothing is
 stored anywhere, and a link opens offline once the site has been visited.
 Opening one plays the replay without touching the viewer's own saved game;
 Close replay goes back to it, and Play this seed fills in the new-game
@@ -106,6 +118,15 @@ the leaderboard's scores are checked.
 The total is then scaled by the opponent: levels 1 to 5 count 40%, 80%,
 120%, 170% and 240%; a network game counts 100%.
 
+Then by time. A win or a draw earns up to 50% more, shrinking evenly to
+nothing at 30 minutes: a 3 minute win gets +45%, a 15 minute one +25%.
+Losses get nothing from time. The time is the server's, from the start
+ticket to the moment the page reports the game over (`/api/game/finish`), so
+watching the replay or typing a name afterwards costs nothing. Only games on
+a seed the server picked earn it: leave the seed empty and the server
+chooses one. A pasted seed could have been practised against the
+deterministic computer, so it scores everything but the time bonus.
+
 ## The leaderboard and anti-cheat
 
 Games against the computer and network games count; games on one device do
@@ -116,8 +137,14 @@ started offline play the same, and say they are not scored.
 On submit the API trusts nothing but the name. It replays every move from the
 seed and refuses an illegal one. It reads the result off the final position,
 or accepts a resignation. It replays the computer at every one of its moves
-and refuses any that differ. It computes the score itself. The database then
-refuses a submission that:
+and refuses any that differ. It holds clock claims against its own clock:
+
+| Code | When |
+| --- | --- |
+| `clock` | a player's clock, or the game's, is said to have run out before that much time had passed on the server |
+| `over_time` | a timed game ended on the board a minute or more after its time should have ended it |
+
+It computes the score itself. The database then refuses a submission that:
 
 | Code | When |
 | --- | --- |
@@ -160,15 +187,19 @@ every change to anything in this directory.
 
 | Endpoint | Body | Returns |
 | --- | --- | --- |
-| `POST /api/game/start` | `client_key, mode, seed, difficulty?, side?` | `game_id, seed, first_side, created_at` |
+| `POST /api/game/start` | `client_key, mode, seed?, variant?, difficulty?, side?, time?` | `game_id, seed, first_side, server_seed, created_at` |
 | `POST /api/game/undo` | `game_id, client_key, side` | `undos` |
-| `POST /api/game/submit` | `game_id, client_key, name, side, moves, resigned?, undos?` | `name, score, outcome, rank, best_score, total, games, total_rank` |
+| `POST /api/game/finish` | `game_id, client_key, moves, end?` | `elapsed_ms, server_seed` |
+| `POST /api/game/submit` | `game_id, client_key, name, side, moves, end?, undos?` | `name, score, outcome, time_bonus, elapsed_ms, rank, best_score, total, games, total_rank` |
 | `POST /api/leaderboard/name` | `name` | `name`, cleaned, or a `400` saying why not |
 | `GET /api/leaderboard` | `?board=best` or `?board=total` | `board, entries`, cached 30 s |
 
-`side` and `resigned` are `w` or `b`. Errors are `{ error, message? }` with a
-matching status. Start is limited to 60 an address per 10 minutes and submit
-to 30. Submit replays the whole game, so `vercel.json` gives it up to 300
+`side` is `w` or `b`. With no `seed`, start picks one in `variant` (`960` or
+`STD`). `time` is `{ mode: "each" | "total", ms }`, 1 to 180 minutes. `end`
+is how a game ended off the board: `{ by: "resign" | "flag", side }` or
+`{ by: "timeup" }`. Errors are `{ error, message? }` with a matching status.
+Start and finish are limited to 60 an address per 10 minutes, and submit to
+30. Submit replays the whole game, so `vercel.json` gives it up to 300
 seconds, although a long Master game takes well under a minute.
 
 ## Environment variables (Vercel)

@@ -132,6 +132,31 @@
                 </div>
 
                 <div class="field-group">
+                    <p class="field-label" id="timeLabel">Time limit</p>
+                    <div class="time-pick" id="timePick" role="radiogroup" aria-labelledby="timeLabel">
+                        <button class="mode-btn" type="button" role="radio" aria-checked="true" data-time="0">None</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="1">1 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="3">3 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="5">5 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="10">10 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="15">15 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="30">30 min</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-time="custom">Custom</button>
+                    </div>
+                    <div class="custom-time hidden" id="customTime">
+                        <label for="customMinutes" class="visually-hidden">Minutes</label>
+                        <input id="customMinutes" class="field" type="number" min="1" max="180" step="1" inputmode="numeric"
+                            placeholder="Minutes" enterkeyhint="done">
+                        <span class="field-suffix">minutes, 1 to 180</span>
+                    </div>
+                    <div class="mode-toggle hidden" id="timeSplitPick" role="radiogroup" aria-label="How the time is shared">
+                        <button class="mode-btn" type="button" role="radio" aria-checked="true" data-split="each">Each player</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-split="total">Whole game</button>
+                    </div>
+                    <p class="field-note" id="timeNote"></p>
+                </div>
+
+                <div class="field-group">
                     <label class="field-label" for="seedInput">Seed</label>
                     <div class="guess">
                         <input id="seedInput" class="field seed-field" type="text" placeholder="Random" maxlength="20"
@@ -181,12 +206,13 @@
                 <div class="game-meta">
                     <span class="chip" id="turnChip"></span>
                     <span class="chip" id="scoreChip"></span>
+                    <span class="chip clock" id="gameClock" role="timer" aria-label="Game clock"></span>
                     <button class="chip chip-btn" id="seedChip" type="button" aria-label="Copy seed"></button>
                 </div>
 
-                <div class="player-row" id="topRow"><span class="player-name" id="topName"></span><span class="captured" id="topCaptured"></span></div>
+                <div class="player-row" id="topRow"><span class="player-name" id="topName"></span><span class="captured" id="topCaptured"></span><span class="clock" id="topClock" role="timer"></span></div>
                 <div class="board-wrap" id="board"></div>
-                <div class="player-row" id="bottomRow"><span class="player-name" id="bottomName"></span><span class="captured" id="bottomCaptured"></span></div>
+                <div class="player-row" id="bottomRow"><span class="player-name" id="bottomName"></span><span class="captured" id="bottomCaptured"></span><span class="clock" id="bottomClock" role="timer"></span></div>
 
                 <p id="status" class="status" role="status" aria-live="polite"></p>
 

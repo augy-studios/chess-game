@@ -57,9 +57,11 @@ async function call(method, path, body) {
 }
 
 export const api = {
-  start: ({ mode, seed, difficulty, side }) =>
-    call("POST", "/api/game/start", { client_key: clientKey(), mode, seed, difficulty, side }),
+  // No seed: the server picks one, in `variant`.
+  start: ({ mode, seed, variant, difficulty, side, time }) =>
+    call("POST", "/api/game/start", { client_key: clientKey(), mode, seed, variant, difficulty, side, time }),
   undo: (gameId, side) => call("POST", "/api/game/undo", { game_id: gameId, client_key: clientKey(), side }),
+  finish: (body) => call("POST", "/api/game/finish", { ...body, client_key: clientKey() }),
   submit: (body) => call("POST", "/api/game/submit", { ...body, client_key: clientKey() }),
   checkName: (name) => call("POST", "/api/leaderboard/name", { name }),
   leaderboard: (board) => call("GET", `/api/leaderboard?board=${encodeURIComponent(board)}`),

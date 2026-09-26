@@ -13,7 +13,10 @@
             "includeFiles": "js/{chess,record,seed,score,ai}.js"
         },
         "api/game/start.js": {
-            "includeFiles": "js/{chess,seed}.js"
+            "includeFiles": "js/{chess,seed,clock}.js"
+        },
+        "api/game/finish.js": {
+            "includeFiles": "js/{chess,record,seed,score,ai}.js"
         }
     },
     "headers": [{

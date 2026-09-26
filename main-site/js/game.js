@@ -1,17 +1,32 @@
 // The game screen: choosing a game, playing it, and what happens after.
 //
 // A game is a seed and a list of moves, and everything on screen is derived
-// from those two by replaying them. That is also all that is saved, sent to
-// the other device in a network game, and submitted to the leaderboard,
-// where the API replays it the same way.
+// from those two by replaying them, plus how it ended if that was not on
+// the board (a resignation, or a clock). That is also all that is saved,
+// sent to the other device in a network game, put in a replay link, and
+// submitted to the leaderboard, where the API replays it the same way.
 
 import { WHITE, BLACK } from "./chess.js";
 import { BoardView, moveMarks } from "./board.js";
-import { replay as replayGame, packMoves, unpackMoves } from "./record.js";
+import { replay as replayGame, packMoves, unpackMoves, outcomeWith, validEnd } from "./record.js";
 import { newSeed, parseSeed } from "./seed.js";
 import { LEVELS } from "./ai.js";
 import { requestMove, cancelMove } from "./computer.js";
-import { finalScore, liveScore, percentFor, resultFor, UNDO_COST } from "./score.js";
+import { finalScore, liveScore, percentFor, resultFor, timeBonus, UNDO_COST, TIME_BONUS_MAX } from "./score.js";
+import {
+  PRESET_MINUTES,
+  MIN_MINUTES,
+  MAX_MINUTES,
+  validTime,
+  newClock,
+  remaining,
+  hand,
+  stop,
+  clockToWire,
+  clockFromWire,
+  formatClock,
+  formatTaken,
+} from "./clock.js";
 import { api } from "./api.js";
 import { getSettings, onSettingsChange, saveSettings } from "./settings.js";
 import { openLeaderboard } from "./leaderboard.js";
@@ -24,6 +39,9 @@ const SETUP_STORAGE = "uwuchess.setup";
 const SIDE_NAME = ["White", "Black"];
 const SIDE_LETTER = ["w", "b"];
 const VALUE = [0, 1, 3, 3, 5, 9, 0];
+const LOW_TIME_MS = 20000;
+// How long to wait for the server to pick a seed before starting offline.
+const START_WAIT_MS = 5000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,15 +50,19 @@ let replayer = null;
 let g = null; // the game on screen, or null
 let rec = null; // replayGame(g.seed, g.moves), refreshed on every change
 let thinking = false;
+let launching = false;
 let gameCounter = 0;
 let resignTimer = null;
 let leaveTimer = null;
+let rowSides = [0, 1]; // the sides shown in the bottom and top rows
 let net = null; // set by multiplayer.js for network games
-let watching = null; // a shared replay being watched: { seed, moves, resigned, meta }
+let watching = null; // a shared replay being watched: { seed, moves, end, meta }
 
 /* ---- setup ---- */
 
-const setup = { mode: "computer", level: 3, side: "seed", variant: "960" };
+// time: 0 for none, minutes for a preset, or "custom" for `custom` minutes.
+// split: "each" for a clock per player, "total" for one for the game.
+const setup = { mode: "computer", level: 3, side: "seed", variant: "960", time: 0, custom: 20, split: "each" };
 
 function loadSetup() {
   const saved = store.getJSON(SETUP_STORAGE) ?? {};
@@ -48,6 +70,9 @@ function loadSetup() {
   if (Number.isInteger(saved.level) && saved.level >= 1 && saved.level <= 5) setup.level = saved.level;
   if (["w", "b", "seed"].includes(saved.side)) setup.side = saved.side;
   if (["960", "STD"].includes(saved.variant)) setup.variant = saved.variant;
+  if (saved.time === 0 || saved.time === "custom" || PRESET_MINUTES.includes(saved.time)) setup.time = saved.time;
+  if (Number.isInteger(saved.custom) && saved.custom >= MIN_MINUTES && saved.custom <= MAX_MINUTES) setup.custom = saved.custom;
+  if (["each", "total"].includes(saved.split)) setup.split = saved.split;
 }
 
 function saveSetup() {
@@ -60,68 +85,148 @@ const MODE_NOTES = {
   network: "Play someone on the same wifi, or sharing a hotspot. Scored when started online.",
 };
 
+function timeNote() {
+  if (setup.time === 0) return "";
+  const min = setup.time === "custom" ? setup.custom : setup.time;
+  if (setup.split === "total") {
+    return `${min} minutes for the whole game. When it runs out, whoever has more material wins.`;
+  }
+  const each =
+    setup.mode === "computer"
+      ? `You have ${min} minutes; only your own thinking time counts.`
+      : `Each player has ${min} minutes of their own.`;
+  return `${each} Running out loses, unless the other side could never checkmate.`;
+}
+
 function renderSetup() {
-  document.querySelectorAll("#modePick [data-pick]").forEach((el) => {
-    el.setAttribute("aria-checked", String(el.dataset.pick === setup.mode));
-  });
-  document.querySelectorAll("#levelPick [data-level]").forEach((el) => {
-    el.setAttribute("aria-checked", String(Number(el.dataset.level) === setup.level));
-  });
-  document.querySelectorAll("#sidePick [data-side]").forEach((el) => {
-    el.setAttribute("aria-checked", String(el.dataset.side === setup.side));
-  });
-  document.querySelectorAll("#variantPick [data-variant]").forEach((el) => {
-    el.setAttribute("aria-checked", String(el.dataset.variant === setup.variant));
-  });
+  const check = (sel, attr, value) =>
+    document.querySelectorAll(sel).forEach((el) => el.setAttribute("aria-checked", String(el.dataset[attr] === String(value))));
+  check("#modePick [data-pick]", "pick", setup.mode);
+  check("#levelPick [data-level]", "level", setup.level);
+  check("#sidePick [data-side]", "side", setup.side);
+  check("#variantPick [data-variant]", "variant", setup.variant);
+  check("#timePick [data-time]", "time", setup.time);
+  check("#timeSplitPick [data-split]", "split", setup.split);
   $("levelGroup").classList.toggle("hidden", setup.mode !== "computer");
   $("sideGroup").classList.toggle("hidden", setup.mode === "local");
   $("sideLabel").textContent = setup.mode === "network" ? "Host plays as" : "Play as";
   $("joinForm").classList.toggle("hidden", setup.mode !== "network");
-  $("startLabel").textContent = setup.mode === "network" ? "Host a game" : "Start game";
+  $("startLabel").textContent = launching ? "Starting" : setup.mode === "network" ? "Host a game" : "Start game";
+  $("startBtn").disabled = launching;
   $("modeNote").textContent = MODE_NOTES[setup.mode];
+  $("customTime").classList.toggle("hidden", setup.time !== "custom");
+  if (document.activeElement !== $("customMinutes")) $("customMinutes").value = String(setup.custom);
+  $("timeSplitPick").classList.toggle("hidden", setup.time === 0);
+  $("timeNote").textContent = timeNote();
 }
 
-// What the seed field holds, as a seed, or null if it cannot be one. Eight
-// characters with no prefix take the start position chosen above.
-function seedFromField() {
-  const raw = $("seedInput").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (!raw) return newSeed(setup.variant);
-  return /^(960|STD)/.test(raw) ? parseSeed(raw) : parseSeed(setup.variant + raw);
+// The chosen time limit, null for none, or undefined if the custom number
+// is not one.
+function timeFromSetup() {
+  if (setup.time === 0) return null;
+  // The field as it reads now, not the last good number typed into it.
+  const minutes = setup.time === "custom" ? Number($("customMinutes").value) : setup.time;
+  if (!Number.isInteger(minutes) || minutes < MIN_MINUTES || minutes > MAX_MINUTES) return undefined;
+  return { mode: setup.split, ms: minutes * 60000 };
 }
 
-function badSeed() {
-  const input = $("seedInput");
-  $("seedNote").textContent = "That is not a seed. Seeds look like 960-BXK4-M9TR.";
+function shake(input) {
   input.classList.remove("shake");
   void input.offsetWidth;
   input.classList.add("shake");
   input.focus();
 }
 
+// What the seed field holds, as a seed, or null if it cannot be one. Eight
+// characters with no prefix take the start position chosen above.
+function seedFromField() {
+  const raw = $("seedInput").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return /^(960|STD)/.test(raw) ? parseSeed(raw) : parseSeed(setup.variant + raw);
+}
+
 function onStart() {
-  const seed = seedFromField();
-  if (!seed) return badSeed();
+  const typed = $("seedInput").value.trim() !== "";
+  const seed = typed ? seedFromField() : null;
+  if (typed && !seed) {
+    $("seedNote").textContent = "That is not a seed. Seeds look like 960-BXK4-M9TR.";
+    return shake($("seedInput"));
+  }
+  const time = timeFromSetup();
+  if (time === undefined) {
+    $("timeNote").textContent = `Enter a whole number of minutes, ${MIN_MINUTES} to ${MAX_MINUTES}.`;
+    return shake($("customMinutes"));
+  }
+  const sideChoice = setup.side === "seed" ? null : setup.side;
   if (setup.mode === "network") {
-    net?.host({ seed, side: setup.side });
+    net?.host({ seed, variant: setup.variant, side: sideChoice, time });
     return;
   }
-  startGame({
+  launch({
     mode: setup.mode,
     seed,
+    variant: setup.variant,
     level: setup.level,
-    sideChoice: setup.mode === "local" ? null : setup.side === "seed" ? null : setup.side,
+    sideChoice: setup.mode === "local" ? null : sideChoice,
+    time,
   });
+}
+
+function setLaunching(on) {
+  launching = on;
+  $("againBtn").disabled = on;
+  renderSetup();
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))]);
+}
+
+// Starts a game. With no seed, a scored game asks the server to pick one
+// (only those earn the time bonus); if it cannot be reached in a few
+// seconds, the game starts anyway on a seed of its own, unscored. A pasted
+// seed starts at once and fetches its ticket meanwhile. Resolves with the
+// game, or null if a start was already under way.
+export async function launch(opts) {
+  const { mode, variant = "960", level = null, sideChoice = null, time = null, role = null } = opts;
+  if (mode === "local" || opts.seed) return startGame({ ...opts, seed: opts.seed ?? newSeed(variant) });
+  if (launching) return null;
+  setLaunching(true);
+  let ticket = null;
+  try {
+    ticket = await withTimeout(api.start({ mode, variant, difficulty: level ?? undefined, side: sideChoice ?? undefined, time: time ?? undefined }), START_WAIT_MS);
+  } catch {
+    ticket = null;
+  }
+  setLaunching(false);
+  const seed = ticket && parseSeed(ticket.seed);
+  if (seed) {
+    return startGame({
+      mode,
+      role,
+      seed,
+      level,
+      sideChoice,
+      time,
+      firstSide: ticket.first_side,
+      gameId: ticket.game_id,
+      ticket: "ok",
+      serverSeed: ticket.server_seed === true,
+    });
+  }
+  return startGame({ mode, role, seed: newSeed(variant), level, sideChoice, time, ticket: "offline" });
 }
 
 /* ---- the game ---- */
 
 // opts: { mode, seed, level?, sideChoice ("w" | "b" | null), role?,
-// firstSide?, gameId?, moves?, undos?, resigned?, submitted?, ticket? }
+// firstSide?, gameId?, moves?, undos?, end?, submitted?, ticket?,
+// serverSeed?, time?, clock?, startedAt?, elapsed? }
 export function startGame(opts) {
   cancelMove();
   thinking = false;
   replayer.stop();
   if (watching) closeWatch({ show: false });
+  const now = Date.now();
   const sideChoice = opts.sideChoice ?? null;
   g = {
     id: ++gameCounter,
@@ -133,10 +238,16 @@ export function startGame(opts) {
     firstSide: opts.firstSide ?? (sideChoice === "w" ? WHITE : sideChoice === "b" ? BLACK : opts.seed.firstSide),
     moves: opts.moves?.slice() ?? [],
     undos: opts.undos?.slice() ?? [0, 0],
-    resigned: opts.resigned ?? null,
+    end: opts.end ?? null,
     gameId: opts.gameId ?? null,
     ticket: opts.ticket ?? (opts.mode === "local" || opts.role === "guest" ? "none" : "pending"),
+    serverSeed: opts.serverSeed ?? false,
     submitted: opts.submitted ?? false,
+    time: opts.time ?? null,
+    clock: opts.clock ?? newClock(now),
+    startedAt: opts.startedAt ?? now,
+    elapsed: opts.elapsed ?? null,
+    finishSent: opts.elapsed != null,
     takeback: null,
     flipped: false,
     wasOver: false,
@@ -147,6 +258,7 @@ export function startGame(opts) {
     g.moves = g.moves.slice(0, rec.error.ply);
     rec = replayGame(g.seed, g.moves);
   }
+  if (!opts.clock) syncClock();
   disarmResign();
   disarmLeave();
   showPanel("play");
@@ -158,6 +270,8 @@ export function startGame(opts) {
   return g;
 }
 
+// The ticket for a game on a seed the player chose. It never earns the time
+// bonus, but it can go on the leaderboard.
 async function fetchTicket(game) {
   try {
     const t = await api.start({
@@ -165,6 +279,7 @@ async function fetchTicket(game) {
       seed: game.seed.text,
       difficulty: game.level ?? undefined,
       side: SIDE_LETTER[game.firstSide],
+      time: game.time ?? undefined,
     });
     if (game !== g) return;
     g.gameId = t.game_id;
@@ -179,16 +294,11 @@ async function fetchTicket(game) {
 }
 
 function isOver() {
-  return Boolean(g && (g.resigned !== null || rec.outcome));
+  return Boolean(g && (g.end !== null || rec.outcome));
 }
 
-// The outcome, counting a resignation: { result, reason, winner }.
 function outcome() {
-  if (g.resigned !== null) {
-    const winner = g.resigned ^ 1;
-    return { result: winner === WHITE ? "1-0" : "0-1", reason: "resign", winner };
-  }
-  return rec.outcome;
+  return outcomeWith(rec, g.end);
 }
 
 // The side this screen plays: the person against the computer, one end of
@@ -221,6 +331,91 @@ function percent() {
   return percentFor(g.mode, g.level);
 }
 
+/* ---- the clock ---- */
+
+// Whether `side` has a clock of its own. Against the computer only the
+// player does: its thinking time depends on the device, and nobody could
+// check a claim that it ran out.
+function clocked(side) {
+  return g.time?.mode === "each" && (g.mode !== "computer" || side === g.firstSide);
+}
+
+// The guest's clock is the host's, from the snapshots. Everybody else keeps
+// their own.
+function ownsClock() {
+  return Boolean(g?.time) && g.role !== "guest";
+}
+
+// Hands the clock to whoever is to move now, or stops it if the game is
+// over. Safe to call after any change.
+function syncClock() {
+  if (!ownsClock()) return;
+  const now = Date.now();
+  if (isOver()) stop(g.clock, now);
+  else if (g.time.mode === "each") hand(g.clock, clocked(rec.pos.turn) ? rec.pos.turn : -1, now);
+}
+
+function endByTime(end) {
+  cancelMove();
+  thinking = false;
+  g.end = end;
+  stop(g.clock, Date.now());
+  $("status").dataset.last = end.by === "flag" ? `${SIDE_NAME[end.side]} ran out of time.` : "The game clock ran out.";
+  persist();
+  update();
+  net?.changed();
+}
+
+function tickClock() {
+  if (!g?.time) return;
+  renderClocks();
+  if (isOver() || !ownsClock()) return;
+  const now = Date.now();
+  if (g.time.mode === "total") {
+    if (remaining(g.time, g.clock, 0, now) <= 0) endByTime({ by: "timeup" });
+    return;
+  }
+  const side = g.clock.running;
+  if (side >= 0 && remaining(g.time, g.clock, side, now) <= 0) endByTime({ by: "flag", side });
+}
+
+function renderClock(el, ms, running, label) {
+  el.textContent = formatClock(ms);
+  el.classList.toggle("running", running);
+  el.classList.toggle("low", ms < LOW_TIME_MS);
+  el.setAttribute("aria-label", label);
+}
+
+function renderClocks() {
+  const now = Date.now();
+  const over = isOver();
+  const game = $("gameClock");
+  const rows = [$("bottomClock"), $("topClock")];
+  if (!g?.time) {
+    game.textContent = "";
+    rows.forEach((el) => (el.textContent = ""));
+    return;
+  }
+  if (g.time.mode === "total") {
+    rows.forEach((el) => (el.textContent = ""));
+    const ms = remaining(g.time, g.clock, 0, now);
+    renderClock(game, ms, !over, `Game clock, ${formatClock(ms)} left`);
+    return;
+  }
+  game.textContent = "";
+  rows.forEach((el, i) => {
+    const side = rowSides[i];
+    if (!clocked(side)) {
+      el.textContent = "";
+      return;
+    }
+    const ms = remaining(g.time, g.clock, side, now);
+    renderClock(el, ms, !over && g.clock.running === side, `${SIDE_NAME[side]}'s clock, ${formatClock(ms)} left`);
+  });
+}
+
+/* ---- moves ---- */
+
 // Plays a move, from the board, the computer or the network. Returns false
 // if it is not legal here and now.
 export function playMove(text, { from = "board" } = {}) {
@@ -230,6 +425,7 @@ export function playMove(text, { from = "board" } = {}) {
   if (!marks) return false;
   g.moves.push(text);
   rec = replayGame(g.seed, g.moves);
+  syncClock();
   persist();
   const ply = rec.plies.at(-1);
   announce(ply, from);
@@ -263,7 +459,7 @@ async function maybeComputer() {
   const pause = new Promise((r) => setTimeout(r, 350 + g.level * 60));
   const text = await requestMove(g.seed.text, g.level, g.moves);
   await pause;
-  if (game !== g || g.moves.length !== ply || !thinking) return;
+  if (game !== g || g.moves.length !== ply || !thinking || isOver()) return;
   thinking = false;
   if (!text || !playMove(text, { from: "computer" })) update();
 }
@@ -288,7 +484,8 @@ function canUndo() {
 }
 
 // Takes back `count` plies, charging the undo to `side`. Shared with network
-// takebacks, which the host applies once they are accepted.
+// takebacks, which the host applies once they are accepted. Time already
+// spent stays spent: the clock is not wound back.
 export function takeBack(count, side) {
   if (!count) return;
   const marks = [];
@@ -300,9 +497,14 @@ export function takeBack(count, side) {
     g.moves.pop();
   }
   g.undos[side]++;
-  g.resigned = null;
+  g.end = null;
   g.takeback = null;
+  // The game is open again: its next ending is a new one to report.
+  g.finishSent = false;
+  g.elapsed = null;
+  if (g.clock.stopped && ownsClock()) g.clock.stopped = null;
   rec = replayGame(g.seed, g.moves);
+  syncClock();
   if (g.gameId && (g.mode === "computer" || (g.mode === "network" && side === mySide()))) {
     api.undo(g.gameId, SIDE_LETTER[side]).catch(() => {});
   }
@@ -361,7 +563,8 @@ export function resign(side) {
   if (!g || isOver()) return;
   cancelMove();
   thinking = false;
-  g.resigned = side;
+  g.end = { by: "resign", side };
+  syncClock();
   $("status").dataset.last = `${SIDE_NAME[side]} resigned.`;
   persist();
   update();
@@ -434,6 +637,7 @@ function update({ animate = null, fresh = false } = {}) {
   $("scoreChip").textContent = scoring() && !over ? `${live} ${live === 1 ? "point" : "points"}` : "";
 
   renderPlayers();
+  renderClocks();
   renderStatus(over);
   renderActions(over);
   renderTakeback();
@@ -447,6 +651,7 @@ function sideLabel(side) {
 
 function renderPlayers() {
   const bottom = orientation();
+  rowSides = [bottom, bottom ^ 1];
   const taken = [[], []];
   for (const p of rec.plies) if (p.captured) taken[p.side].push(p.captured);
   const material = (side) => taken[side].reduce((sum, t) => sum + VALUE[t], 0);
@@ -501,6 +706,7 @@ function renderActions(over) {
   } else if (g.mode === "network") {
     note = "Undo asks your opponent to take your last move back. Each one they accept costs you points.";
   }
+  if (g.time) note += " Undo does not give time back.";
   if (g.ticket === "offline" && scoring()) note += " This game started offline, so it is not scored.";
   const undone = g.undos[mySide()];
   if (scoring() && undone) note += ` Undos so far: ${undone}.`;
@@ -537,6 +743,23 @@ const REASONS = {
   repetition: "The same position came up three times.",
 };
 
+function reasonText(o, end) {
+  switch (o.reason) {
+    case "resign":
+      return `${SIDE_NAME[end.side]} resigned.`;
+    case "flag":
+      return `${SIDE_NAME[end.side]} ran out of time.`;
+    case "flag-draw":
+      return `${SIDE_NAME[end.side]} ran out of time, but the other side could never checkmate.`;
+    case "timeup":
+      return o.winner === -1 ? "The game clock ran out with material level." : "The game clock ran out, and more material wins.";
+    case "unfinished":
+      return "The game stops here.";
+    default:
+      return REASONS[o.reason] ?? "";
+  }
+}
+
 function resetResult() {
   // A takeback reopens the game, and its next ending gets a fresh try.
   if (g) g.submitRefused = false;
@@ -544,6 +767,35 @@ function resetResult() {
   $("replayBar").classList.add("hidden");
   $("submitted").classList.add("hidden");
   $("submitMsg").textContent = "";
+}
+
+// How long the game took: the server's figure once it has one, this
+// device's until then.
+function elapsed() {
+  if (g.elapsed != null) return g.elapsed;
+  return (g.clock.stopped ?? Date.now()) - g.startedAt;
+}
+
+function renderScoreLine() {
+  const me = mySide();
+  const result = resultFor(outcome().winner, me);
+  const took = `Took ${formatTaken(elapsed())}`;
+  if (!scoring()) {
+    $("resultScore").textContent = `${took}.`;
+    return;
+  }
+  const bonus = timeBonus(result, elapsed(), g.serverSeed);
+  const score = finalScore(rec.plies, me, result, percent(), g.undos[me], bonus);
+  const parts = [`${score} ${score === 1 ? "point" : "points"}`];
+  if (bonus) parts.push(`+${bonus}% for time`);
+  if (g.undos[me]) parts.push(`${g.undos[me]} undo${g.undos[me] === 1 ? "" : "s"}`);
+  let line = `${parts.join(", ")}. ${took}.`;
+  if ((result === "win" || result === "draw") && !g.serverSeed && g.gameId) {
+    line += ` No time bonus: the seed was chosen, not picked by the server.`;
+  } else if ((result === "win" || result === "draw") && !bonus && g.serverSeed) {
+    line += ` Up to +${TIME_BONUS_MAX}% for finishing within 30 minutes.`;
+  }
+  $("resultScore").textContent = line;
 }
 
 function finish(fresh) {
@@ -557,10 +809,9 @@ function finish(fresh) {
   else if (g.mode === "computer") title = result === "win" ? "You won" : result === "draw" ? "Draw" : "The computer won";
   else title = result === "win" ? "You won" : result === "draw" ? "Draw" : "You lost";
   $("resultTitle").textContent = title;
-  $("resultReason").textContent = o.reason === "resign" ? `${SIDE_NAME[g.resigned]} resigned.` : REASONS[o.reason];
+  $("resultReason").textContent = reasonText(o, g.end);
 
-  const score = finalScore(rec.plies, me, result, percent(), g.undos[me]);
-  $("resultScore").textContent = scoring() ? `${score} ${score === 1 ? "point" : "points"}${g.undos[me] ? `, after ${g.undos[me]} undo${g.undos[me] === 1 ? "" : "s"}` : ""}.` : "";
+  renderScoreLine();
   $("resultSeed").textContent = `Seed ${g.seed.text}`;
   $("copySeedLabel").textContent = "Copy seed";
   $("shareLabel").textContent = "Share replay";
@@ -583,11 +834,38 @@ function finish(fresh) {
   if (!fresh) $("resultTitle").focus({ preventScroll: true });
 }
 
+// An end claim as the API takes it: sides as "w" or "b".
+function wireEnd(end) {
+  if (!end) return null;
+  return end.by === "timeup" ? { by: "timeup" } : { by: end.by, side: SIDE_LETTER[end.side] };
+}
+
+// Tells the server the game is over, the moment it is, so its clock stops
+// there. Tried again when the connection comes back.
+async function reportFinish(game) {
+  if (!game.gameId || game.finishSent || game !== g || !isOver()) return;
+  game.finishSent = true;
+  try {
+    const r = await api.finish({ game_id: game.gameId, moves: game.moves, end: wireEnd(game.end) });
+    game.elapsed = r.elapsed_ms;
+    game.serverSeed = r.server_seed === true;
+    if (game === g) {
+      persist();
+      if (isOver()) renderScoreLine();
+    }
+  } catch (err) {
+    if (err.code !== "offline") return;
+    game.finishSent = false;
+    window.addEventListener("online", () => reportFinish(game), { once: true });
+  }
+}
+
 // The leaderboard part of the result. Redrawn on every update while the game
 // is over, because the start ticket can arrive after the game has ended: the
 // host's check-in can be slow, and the guest only learns of it from the
 // host's next snapshot. Either player then gets the form as soon as it does.
 function renderSubmit() {
+  reportFinish(g);
   const canSubmit = Boolean(scoring() && g.gameId && !g.submitted);
   $("submitForm").classList.toggle("hidden", !canSubmit || g.submitRefused);
   let why = "";
@@ -623,16 +901,19 @@ async function submitAs(name, auto = false) {
       name,
       side: SIDE_LETTER[me],
       moves: game.moves,
-      resigned: game.resigned === null ? null : SIDE_LETTER[game.resigned],
+      end: wireEnd(game.end),
       undos: game.undos[me],
     });
     if (game !== g) return;
     saveSettings({ name: r.name });
     g.submitted = true;
+    g.elapsed = r.elapsed_ms;
     persist();
+    renderScoreLine();
     const games = r.games === 1 ? "1 game" : `${r.games} games`;
+    const bonus = r.time_bonus ? `, with +${r.time_bonus}% for time` : "";
     $("submittedText").textContent =
-      `Added as ${r.name} for ${r.score} points. Best ${r.best_score}, ranked ${r.rank}. ` +
+      `Added as ${r.name} for ${r.score} points${bonus}. Best ${r.best_score}, ranked ${r.rank}. ` +
       `Total ${r.total} over ${games}, ranked ${r.total_rank}.`;
     $("submitForm").classList.add("hidden");
     $("submitted").classList.remove("hidden");
@@ -643,7 +924,20 @@ async function submitAs(name, auto = false) {
     if (err.code === "offline") msg.textContent = "No connection. Try again once you are back online.";
     else if (auto && err.status === 400) msg.textContent = "Your saved name was refused, so this game was not added. Change it in Settings.";
     else msg.textContent = err.message || "That did not go through. Try again in a moment.";
-    const final = ["already_submitted", "expired", "too_fast", "overlap", "seed_used", "not_yours", "same_device", "not_computer", "illegal", "mismatch"];
+    const final = [
+      "already_submitted",
+      "expired",
+      "too_fast",
+      "overlap",
+      "seed_used",
+      "not_yours",
+      "same_device",
+      "not_computer",
+      "illegal",
+      "mismatch",
+      "clock",
+      "over_time",
+    ];
     if (final.includes(err.code)) {
       g.submitRefused = true;
       $("submitForm").classList.add("hidden");
@@ -664,10 +958,10 @@ function onSubmit(event) {
 
 /* ---- sharing a replay ----
    A replay link holds the whole game: the seed, the moves packed one byte
-   each (record.js), who played, and a resignation. Nothing is stored
-   anywhere, so a link works for as long as the site does, offline too. It
-   carries no score: anyone can edit a link, and only the leaderboard's
-   score is checked. */
+   each (record.js), who played, and how it ended if not on the board.
+   Nothing is stored anywhere, so a link works for as long as the site does,
+   offline too. It carries no score: anyone can edit a link, and only the
+   leaderboard's score is checked. */
 
 // "c3w": against the computer at level 3, the player White. "l": two
 // people on one device. "n": a network game.
@@ -683,16 +977,31 @@ function readMeta(text) {
   return { mode: m[3] ? "local" : "network" };
 }
 
-function replayLink(seed, moves, resigned, meta) {
+// An ending in a link: "rw" White resigned, "fb" Black ran out of time,
+// "t" the game clock ran out.
+function endToLink(end) {
+  if (!end) return null;
+  return end.by === "timeup" ? "t" : `${end.by[0]}${SIDE_LETTER[end.side]}`;
+}
+
+function endFromLink(text) {
+  const m = /^(?:([rf])([wb])|(t))$/.exec(text ?? "");
+  if (!m) return null;
+  if (m[3]) return { by: "timeup" };
+  return { by: m[1] === "r" ? "resign" : "flag", side: m[2] === "w" ? WHITE : BLACK };
+}
+
+function replayLink(seed, moves, end, meta) {
   const params = new URLSearchParams({ watch: packMoves(seed, moves), seed: seed.text, game: meta });
-  if (resigned !== null) params.set("resign", SIDE_LETTER[resigned]);
+  const e = endToLink(end);
+  if (e) params.set("end", e);
   return `${location.origin}/?${params}`;
 }
 
 async function onShare() {
-  const src = watching ?? (g && { seed: g.seed, moves: g.moves, resigned: g.resigned, meta: metaFor(g) });
+  const src = watching ?? (g && { seed: g.seed, moves: g.moves, end: g.end, meta: metaFor(g) });
   if (!src) return;
-  const url = replayLink(src.seed, src.moves, src.resigned, src.meta);
+  const url = replayLink(src.seed, src.moves, src.end, src.meta);
   const label = $("shareLabel");
   if (navigator.share) {
     try {
@@ -714,9 +1023,7 @@ export function readReplayLink(params) {
   const seed = parseSeed(params.get("seed"));
   const moves = seed && unpackMoves(seed, params.get("watch"));
   if (!moves) return { damaged: true };
-  const r = params.get("resign");
-  const resigned = r === "w" ? WHITE : r === "b" ? BLACK : null;
-  return { seed, moves, resigned, meta: params.get("game") ?? "l" };
+  return { seed, moves, end: endFromLink(params.get("end")), meta: params.get("game") ?? "l" };
 }
 
 function watch(link) {
@@ -726,17 +1033,14 @@ function watch(link) {
   watching = link;
   const meta = readMeta(link.meta);
   const record = replayGame(link.seed, link.moves);
-  // A resignation only stands if the game had not already ended.
-  const resigned = record.outcome ? null : link.resigned;
-  watching.resigned = resigned;
-  const o =
-    resigned !== null
-      ? { reason: "resign", winner: resigned ^ 1 }
-      : record.outcome ?? { reason: "unfinished", winner: -1 };
+  // A claimed ending only stands if the board had not already ended it.
+  if (record.outcome) watching.end = null;
+  const o = outcomeWith(record, watching.end) ?? { reason: "unfinished", winner: -1 };
 
   showPanel("play");
   resetResult();
   for (const id of ["liveActions", "netBar", "takeback", "submitForm", "notScored", "submitted"]) $(id).classList.add("hidden");
+  for (const id of ["gameClock", "topClock", "bottomClock"]) $(id).textContent = "";
   $("undoNote").textContent = "";
   $("status").dataset.last = "";
   $("status").textContent = "A shared replay.";
@@ -758,8 +1062,7 @@ function watch(link) {
   else if (o.winner === -1) $("resultTitle").textContent = "Draw";
   else if (meta.mode === "computer") $("resultTitle").textContent = o.winner === meta.side ? "The player won" : "The computer won";
   else $("resultTitle").textContent = `${SIDE_NAME[o.winner]} won`;
-  $("resultReason").textContent =
-    o.reason === "resign" ? `${SIDE_NAME[resigned]} resigned.` : o.reason === "unfinished" ? "The game stops here." : REASONS[o.reason];
+  $("resultReason").textContent = reasonText(o, watching.end);
   $("resultScore").textContent =
     meta.mode === "computer"
       ? `Against the computer at ${LEVELS[meta.level].name} level.`
@@ -786,7 +1089,7 @@ function closeWatch({ show = true } = {}) {
   watching = null;
   replayer.stop();
   const params = new URLSearchParams(location.search);
-  for (const key of ["watch", "seed", "game", "resign"]) params.delete(key);
+  for (const key of ["watch", "seed", "game", "end"]) params.delete(key);
   const rest = params.toString();
   history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
   if (show && !resume()) {
@@ -818,16 +1121,19 @@ function playWatchedSeed() {
 
 function onAgain() {
   if (watching) return playWatchedSeed();
-  if (!g) return;
+  if (!g || launching) return;
   if (g.mode === "network") {
     net?.nextGame();
     return;
   }
-  startGame({
+  // A fresh seed, picked by the server where it can be.
+  launch({
     mode: g.mode,
-    seed: newSeed(g.seed.variant),
+    seed: null,
+    variant: g.seed.variant,
     level: g.level,
     sideChoice: g.sideChoice,
+    time: g.time,
   });
 }
 
@@ -843,17 +1149,38 @@ function persist() {
     firstSide: g.firstSide,
     moves: g.moves,
     undos: g.undos,
-    resigned: g.resigned,
+    end: g.end,
     gameId: g.gameId,
     ticket: g.ticket === "pending" ? "offline" : g.ticket,
+    serverSeed: g.serverSeed,
     submitted: g.submitted,
+    time: g.time,
+    clock: g.clock,
+    startedAt: g.startedAt,
+    elapsed: g.elapsed,
   });
+}
+
+function savedClock(c) {
+  const t = (x) => Number.isFinite(x) && x > 0;
+  const ok =
+    c &&
+    Array.isArray(c.used) &&
+    c.used.length === 2 &&
+    c.used.every((n) => Number.isFinite(n) && n >= 0) &&
+    [-1, 0, 1].includes(c.running) &&
+    (c.since === null || t(c.since)) &&
+    t(c.start) &&
+    (c.stopped === null || t(c.stopped));
+  return ok ? { used: c.used.slice(), running: c.running, since: c.since, start: c.start, stopped: c.stopped } : null;
 }
 
 function resume() {
   const saved = store.getJSON(GAME_STORAGE);
   const seed = parseSeed(saved?.seed);
   if (!saved || !seed || !["computer", "local"].includes(saved.mode) || !Array.isArray(saved.moves)) return false;
+  const time = validTime(saved.time ?? null) ? saved.time ?? null : null;
+  const clock = savedClock(saved.clock);
   startGame({
     mode: saved.mode,
     seed,
@@ -862,10 +1189,15 @@ function resume() {
     firstSide: saved.firstSide === 1 ? 1 : 0,
     moves: saved.moves.filter((m) => typeof m === "string"),
     undos: Array.isArray(saved.undos) ? saved.undos.map((n) => Number(n) || 0) : [0, 0],
-    resigned: saved.resigned === 0 || saved.resigned === 1 ? saved.resigned : null,
+    end: validEnd(saved.end ?? null) ? saved.end ?? null : null,
     gameId: typeof saved.gameId === "string" ? saved.gameId : null,
     ticket: saved.gameId ? "ok" : saved.mode === "local" ? "none" : "offline",
+    serverSeed: saved.serverSeed === true,
     submitted: saved.submitted === true,
+    time: time && clock ? time : null,
+    clock: time && clock ? clock : undefined,
+    startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt : Date.now(),
+    elapsed: Number.isFinite(saved.elapsed) ? saved.elapsed : null,
   });
   return true;
 }
@@ -900,6 +1232,8 @@ export function setTakeback(value) {
 export function loadSnapshot(snap) {
   const seed = parseSeed(snap.seed);
   if (!seed) return;
+  const now = Date.now();
+  const clock = snap.time ? clockFromWire(snap.clock, now) : undefined;
   const same = g && g.mode === "network" && g.role === "guest" && g.netGame === snap.game && g.seed.text === seed.text;
   if (!same) {
     startGame({
@@ -909,9 +1243,14 @@ export function loadSnapshot(snap) {
       firstSide: snap.firstSide,
       moves: snap.moves,
       undos: snap.undos,
-      resigned: snap.resigned,
+      end: snap.end,
       gameId: snap.gameId,
       ticket: snap.gameId ? "ok" : "none",
+      serverSeed: snap.serverSeed,
+      time: snap.time,
+      clock,
+      // Near enough for "Took"; the server's figure replaces it.
+      startedAt: clock ? clock.start : now,
     });
     g.netGame = snap.game;
     g.takeback = snap.takeback;
@@ -922,11 +1261,15 @@ export function loadSnapshot(snap) {
   const next = snap.moves;
   const extends1 = next.length === old.length + 1 && old.every((m, i) => m === next[i]);
   const myUndosBefore = g.undos[mySide()];
+  const wasOver = isOver();
   g.gameId = snap.gameId;
   if (snap.gameId) g.ticket = "ok";
+  g.serverSeed = snap.serverSeed;
   g.takeback = snap.takeback;
-  g.resigned = snap.resigned;
+  g.end = snap.end;
   g.undos = snap.undos.slice();
+  g.time = snap.time;
+  if (clock) g.clock = clock;
 
   if (extends1) {
     const marks = moveMarks(rec.pos, next.at(-1));
@@ -944,17 +1287,27 @@ export function loadSnapshot(snap) {
     }
     g.moves = next.slice();
     rec = replayGame(g.seed, g.moves);
+    g.finishSent = false;
+    g.elapsed = null;
     replayer.stop();
     resetResult();
     $("status").dataset.last = "A move was taken back.";
     update({ animate: marks });
-  } else if (old.join(" ") !== next.join(" ")) {
+  } else if (old.join(" ") !== next.join(" ") || (wasOver && !isOver())) {
     g.moves = next.slice();
     rec = replayGame(g.seed, g.moves);
     replayer.stop();
     resetResult();
     update();
   } else {
+    if (!wasOver && isOver() && g.end) {
+      $("status").dataset.last =
+        g.end.by === "resign"
+          ? `${SIDE_NAME[g.end.side]} resigned.`
+          : g.end.by === "flag"
+            ? `${SIDE_NAME[g.end.side]} ran out of time.`
+            : "The game clock ran out.";
+    }
     update();
   }
   // Our own accepted undos, counted on the server from this browser.
@@ -971,10 +1324,13 @@ export function snapshot() {
     seed: g.seed.text,
     firstSide: g.firstSide,
     gameId: g.gameId,
+    serverSeed: g.serverSeed,
     moves: g.moves,
-    resigned: g.resigned,
+    end: g.end,
     undos: g.undos,
     takeback: g.takeback,
+    time: g.time,
+    clock: g.time ? clockToWire(g.clock, Date.now()) : null,
   };
 }
 
@@ -991,40 +1347,40 @@ function buildLevelPick() {
     .join("");
 }
 
+// A radio group in the setup: clicking a button sets `key` from its data.
+function pick(id, attr, key, parse = (v) => v) {
+  $(id).addEventListener("click", (e) => {
+    const b = e.target.closest(`[data-${attr}]`);
+    if (!b) return;
+    setup[key] = parse(b.dataset[attr]);
+    saveSetup();
+    renderSetup();
+    if (key === "time" && setup.time === "custom") $("customMinutes").focus();
+  });
+}
+
 export function initGame({ joinCode, replayLink: shared } = {}) {
   board = new BoardView($("board"), { onMove: (text) => onBoardMove(text) });
   replayer = new Replay(board);
   loadSetup();
   buildLevelPick();
 
-  $("modePick").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-pick]");
-    if (!b) return;
-    setup.mode = b.dataset.pick;
-    saveSetup();
-    renderSetup();
+  pick("modePick", "pick", "mode");
+  pick("levelPick", "level", "level", Number);
+  pick("sidePick", "side", "side");
+  pick("variantPick", "variant", "variant");
+  pick("timePick", "time", "time", (v) => (v === "custom" ? "custom" : Number(v)));
+  pick("timeSplitPick", "split", "split");
+  $("customMinutes").addEventListener("input", (e) => {
+    const n = Number(e.target.value);
+    if (Number.isInteger(n) && n >= MIN_MINUTES && n <= MAX_MINUTES) {
+      setup.custom = n;
+      saveSetup();
+    }
+    $("timeNote").textContent = timeNote();
   });
-  $("levelPick").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-level]");
-    if (!b) return;
-    setup.level = Number(b.dataset.level);
-    saveSetup();
-    renderSetup();
-  });
-  $("sidePick").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-side]");
-    if (!b) return;
-    setup.side = b.dataset.side;
-    saveSetup();
-    renderSetup();
-  });
-  $("variantPick").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-variant]");
-    if (!b) return;
-    setup.variant = b.dataset.variant;
-    saveSetup();
-    renderSetup();
-  });
+  $("customMinutes").addEventListener("blur", renderSetup);
+
   $("seedInput").addEventListener("input", () => {
     $("seedNote").textContent = "Leave it empty for a new game, or paste a seed to play that start again.";
     // A pasted seed says its own start position.
@@ -1076,16 +1432,19 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
   });
 
   onSettingsChange(() => {
-    if (watching) {
+    if (watching || (g && isOver())) {
       replayer.view.coords = getSettings().coords;
       replayer.show(replayer.index, null);
       return;
     }
-    if (!g) return;
-    if (isOver()) {
-      replayer.view.coords = getSettings().coords;
-      replayer.show(replayer.index, null);
-    } else update();
+    update();
+  });
+
+  // Clocks tick five times a second; a hidden tab is caught up when it is
+  // shown again, and a clock that ran out meanwhile ends the game then.
+  setInterval(tickClock, 200);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") tickClock();
   });
 
   renderSetup();

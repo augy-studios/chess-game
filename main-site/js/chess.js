@@ -660,6 +660,41 @@ export class Position {
     return minors.every((m) => m.t === BISHOP) && minors.every((m) => m.shade === minors[0].shade);
   }
 
+  // Material in the usual points: pawn 1, knight and bishop 3, rook 5,
+  // queen 9. Decides a game whose shared clock runs out.
+  material(colour) {
+    const worth = [0, 1, 3, 3, 5, 9, 0];
+    let total = 0;
+    for (let sq = 0; sq < 128; sq++) {
+      if (!onBoard(sq)) {
+        sq += 7;
+        continue;
+      }
+      const p = this.board[sq];
+      if (p && colourOf(p) === colour) total += worth[typeOf(p)];
+    }
+    return total;
+  }
+
+  // Whether `colour` has enough left to ever checkmate: anything but a bare
+  // king or a king and one minor piece. A player whose clock runs out only
+  // loses if the other side could still win this way; otherwise it is a draw.
+  canMate(colour) {
+    let minors = 0;
+    for (let sq = 0; sq < 128; sq++) {
+      if (!onBoard(sq)) {
+        sq += 7;
+        continue;
+      }
+      const p = this.board[sq];
+      if (!p || colourOf(p) !== colour) continue;
+      const t = typeOf(p);
+      if (t === PAWN || t === ROOK || t === QUEEN) return true;
+      if (t === KNIGHT || t === BISHOP) minors++;
+    }
+    return minors >= 2;
+  }
+
   // null while the game goes on, otherwise { result, reason, winner }.
   // Threefold repetition and the fifty-move rule end the game at once
   // rather than waiting to be claimed.

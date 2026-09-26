@@ -18,7 +18,8 @@
 
 import { Host, Guest, generateCode, isValidCode, normaliseCode, CODE_LENGTH, PROTOCOL_VERSION } from "./net.js";
 import * as game from "./game.js";
-import { newSeed } from "./seed.js";
+import { validEnd } from "./record.js";
+import { validTime, validWireClock } from "./clock.js";
 import { qrToSvg } from "./qr.js";
 import { copyText, hydrateIcons, store } from "./ui.js";
 
@@ -37,8 +38,11 @@ let role = null; // "host" | "guest" | null
 let host = null;
 let guest = null;
 let code = "";
-let plan = null; // host: { seed, side } for the next game
+// host: the next game. seed is a pasted one, or null for the server to
+// pick; side is "w", "b" or null for the seed's; time a limit or null.
+let plan = null;
 let netGame = 0;
+let startingGame = false;
 let retriedTaken = false;
 let lastHeard = 0;
 let lastState = 0;
@@ -57,8 +61,8 @@ const adapter = {
     if (role === "host") broadcast();
     renderBar();
   },
-  host({ seed, side }) {
-    startHosting(seed, side);
+  host(next) {
+    startHosting(next);
   },
   sendMove(text) {
     guest?.send({ type: "move", text, ply: game.current()?.moves.length ?? 0 });
@@ -95,7 +99,8 @@ const adapter = {
   },
   nextGame() {
     if (role !== "host" || !plan) return;
-    plan.seed = newSeed(plan.seed.variant);
+    // A fresh seed for every game after the first, picked by the server.
+    plan.seed = null;
     startNetworkGame();
   },
 };
@@ -111,10 +116,10 @@ function joinLink(c) {
   return `${location.origin}/?join=${c}`;
 }
 
-async function startHosting(seed, side) {
+async function startHosting(next) {
   closeAll();
   role = "host";
-  plan = { seed, side };
+  plan = { ...next };
   netGame = 0;
   code = readStored(HOST_CODE_KEY) ?? generateCode();
   store.set(HOST_CODE_KEY, code);
@@ -175,8 +180,7 @@ function onHostStatus({ status, message }) {
 
 function restartWithFreshCode() {
   store.remove(HOST_CODE_KEY);
-  const keep = plan;
-  startHosting(keep.seed, keep.side);
+  startHosting(plan);
 }
 
 function stopHosting() {
@@ -186,20 +190,30 @@ function stopHosting() {
   releaseWakeLock();
 }
 
-function startNetworkGame() {
-  const g = game.startGame({
-    mode: "network",
-    role: "host",
-    seed: plan.seed,
-    sideChoice: plan.side === "seed" ? null : plan.side,
-  });
-  g.netGame = ++netGame;
+// The game starts once the guest has said hello, so its clock and the
+// server's start from when both are there.
+async function startNetworkGame() {
+  if (startingGame) return;
+  startingGame = true;
+  try {
+    const g = await game.launch({
+      mode: "network",
+      role: "host",
+      seed: plan.seed,
+      variant: plan.variant,
+      sideChoice: plan.side,
+      time: plan.time,
+    });
+    if (g) g.netGame = ++netGame;
+  } finally {
+    startingGame = false;
+  }
   broadcast();
 }
 
 function broadcast() {
   const g = game.current();
-  if (role !== "host" || !host || !g || g.mode !== "network") return;
+  if (role !== "host" || !host || !g || g.mode !== "network" || !g.netGame) return;
   host.send(game.snapshot());
 }
 
@@ -217,7 +231,7 @@ function onHostMessage(message, from) {
         return;
       }
       if (!g || g.mode !== "network") startNetworkGame();
-      else host.send(game.snapshot(), from);
+      else if (g.netGame) host.send(game.snapshot(), from);
       renderBar();
       return;
     case "move":
@@ -245,7 +259,7 @@ function onHostMessage(message, from) {
       // Leaving on purpose: this code is spent, and the game with it.
       store.remove(HOST_CODE_KEY);
       game.endGame();
-      startHosting(newSeed(plan.seed.variant), plan.side);
+      startHosting({ ...plan, seed: null });
       setNetStatus("Your opponent left. Share the new code to play again.");
       return;
     default:
@@ -343,7 +357,10 @@ function validSnapshot(s) {
     Array.isArray(s.moves) &&
     s.moves.length <= 600 &&
     s.moves.every((m) => typeof m === "string" && MOVE_TEXT.test(m)) &&
-    (s.resigned === null || s.resigned === 0 || s.resigned === 1) &&
+    validEnd(s.end) &&
+    typeof s.serverSeed === "boolean" &&
+    (s.time === null || validTime(s.time)) &&
+    (s.time === null ? s.clock === null : validWireClock(s.clock)) &&
     Array.isArray(s.undos) &&
     s.undos.length === 2 &&
     s.undos.every((n) => Number.isInteger(n) && n >= 0 && n < 100000) &&
@@ -357,7 +374,13 @@ function onGuestMessage(message) {
     case "state":
       if (!validSnapshot(message)) return;
       lastState = Date.now();
-      game.loadSnapshot({ ...message, takeback: message.takeback && { by: message.takeback.by } });
+      // Rebuilt field by field, so nothing unexpected rides along.
+      game.loadSnapshot({
+        ...message,
+        end: message.end && (message.end.by === "timeup" ? { by: "timeup" } : { by: message.end.by, side: message.end.side }),
+        takeback: message.takeback && { by: message.takeback.by },
+        time: message.time && { mode: message.time.mode, ms: message.time.ms },
+      });
       renderBar();
       return;
     case "full":

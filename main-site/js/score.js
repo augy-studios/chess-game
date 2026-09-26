@@ -54,11 +54,27 @@ export function liveScore(plies, side, percent, undos = 0) {
   return Math.max(0, Math.floor((raw * percent) / 100));
 }
 
-// The final score, with the result's bonus and less any undos.
-export function finalScore(plies, side, result, percent, undos = 0) {
+// Finishing quickly. A win or a draw earns up to half as much again,
+// shrinking evenly to nothing at 30 minutes. Losses get nothing from time,
+// so losing fast is never worth anything. The time is the server's, from
+// the start ticket to the game's end, and only a seed the server picked
+// earns it: a seed chosen by the player could have been practised.
+export const TIME_BONUS_MAX = 50;
+export const TIME_BONUS_WINDOW_MS = 30 * 60 * 1000;
+
+export function timeBonus(result, elapsedMs, serverSeed) {
+  if (!serverSeed || (result !== "win" && result !== "draw")) return 0;
+  const left = Math.max(0, TIME_BONUS_WINDOW_MS - Math.max(0, Math.floor(elapsedMs)));
+  return Math.floor((TIME_BONUS_MAX * left) / TIME_BONUS_WINDOW_MS);
+}
+
+// The final score: the result's bonus, less any undos, scaled by the
+// opponent's percentage, then by the time bonus percentage.
+export function finalScore(plies, side, result, percent, undos = 0, bonusPercent = 0) {
   const { own, points } = progress(plies, side);
   let bonus = 0;
   if (result === "win") bonus = WIN + Math.max(0, QUICK_WIN - QUICK_WIN_STEP * own);
   else if (result === "draw") bonus = DRAW;
-  return Math.max(0, Math.floor(((points + bonus - UNDO_COST * undos) * percent) / 100));
+  const base = Math.max(0, Math.floor(((points + bonus - UNDO_COST * undos) * percent) / 100));
+  return Math.floor((base * (100 + bonusPercent)) / 100);
 }
