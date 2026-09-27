@@ -1,4 +1,4 @@
-# Chess Game
+# uwuChess
 
 Chess against a computer that really plays, from Beginner to Master, on one
 device between two people, or between two devices on the same network. Every

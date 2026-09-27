@@ -1,4 +1,4 @@
-// Service worker for Chess Game.
+// Service worker for uwuChess.
 //
 // BUMP VERSION ON EVERY CHANGE TO THIS SITE. Not only when this file
 // changes: any edit under main-site/ is a new build, and the browser only

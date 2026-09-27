@@ -10,7 +10,7 @@ const SW_URL = "/sw.js";
 
 const COPY = {
   label: "Update",
-  ready: "A new version of Chess Game is ready.",
+  ready: "A new version of uwuChess is ready.",
   reload: "Reload",
   later: "Not now",
 };

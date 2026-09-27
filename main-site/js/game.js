@@ -1018,7 +1018,7 @@ async function onShare() {
   const label = $("shareLabel");
   if (navigator.share) {
     try {
-      await navigator.share({ title: "Chess Game replay", text: `Watch this game of chess, seed ${src.seed.text}.`, url });
+      await navigator.share({ title: "uwuChess replay", text: `Watch this game of chess, seed ${src.seed.text}.`, url });
       label.textContent = "Shared";
       return;
     } catch (err) {
