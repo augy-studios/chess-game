@@ -1,6 +1,6 @@
 {
-    "name": "Chess Game by UwU Apps",
-    "short_name": "Chess Game",
+    "name": "uwuChess by UwU Apps",
+    "short_name": "uwuChess",
     "description": "Play chess against a computer that really thinks, from beginner to master, or with a friend on the same wifi. Chess960 seeds, instant replays and a leaderboard.",
     "icons": [{
             "src": "XCG-192.png",
