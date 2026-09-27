@@ -1,7 +1,7 @@
 // Network games: one device hosts and the other joins with a six character
 // code, over net.js. The host is authoritative, per STUN-p2p-spec.md: the
 // guest sends what it wants to do, the host applies it and sends the whole
-// game back, twice a second and on every change. The guest shows nothing as
+// game back, 20 times a second and on every change. The guest shows nothing as
 // done until a snapshot says so.
 //
 // Messages, beyond the spec's hello, state, bye and full:
@@ -25,10 +25,14 @@ import { copyText, hydrateIcons, store } from "./ui.js";
 
 const HOST_CODE_KEY = "uwuchess.hostCode";
 const LAST_CODE_KEY = "uwuchess.lastCode";
-const SNAPSHOT_MS = 500;
+const SNAPSHOT_MS = 50;
+// Silence checks and the guest's bar need nothing like the snapshot rate.
+const TICK_MS = 250;
 const PING_MS = 1000;
 const HOST_SILENCE_MS = 8000;
-const GUEST_STALE_MS = SNAPSHOT_MS * 4;
+// Time, not missed snapshots: at 20 a second a few missed ones is an
+// ordinary wifi stall, and a background host tab only ticks once a second.
+const GUEST_STALE_MS = 2000;
 const MOVE_TEXT = /^(?:[a-h][1-8][a-h][1-8][qrbn]?|O-O|O-O-O)$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -482,7 +486,6 @@ function releaseWakeLock() {
 
 function tick() {
   if (role === "host" && host) {
-    broadcast();
     // A guest silent this long has probably gone; its seat reopens.
     if (host.links.size && Date.now() - lastHeard > HOST_SILENCE_MS) {
       host.dropAll();
@@ -518,7 +521,9 @@ export function initMultiplayer({ joinCode } = {}) {
     game.endGame();
   });
 
-  setInterval(tick, SNAPSHOT_MS);
+  // The steady beat, which doubles as the host's heartbeat.
+  setInterval(() => role === "host" && broadcast(), SNAPSHOT_MS);
+  setInterval(tick, TICK_MS);
   setInterval(() => role === "guest" && guest?.send({ type: "ping" }), PING_MS);
 
   document.addEventListener("visibilitychange", () => {

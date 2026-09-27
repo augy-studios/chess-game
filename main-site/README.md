@@ -168,7 +168,7 @@ and replayed games, not to prove who played the moves.
 Per `STUN-p2p-spec.md`: STUN only, no TURN relay. **Both devices have to be
 on the same network**: the same wifi, or one sharing a hotspot with the
 other. PeerJS loads from cdnjs only when somebody hosts or joins, and is
-never cached. The host holds the game and sends it in full twice a second;
+never cached. The host holds the game and sends it in full 20 times a second;
 the guest sends moves, resignations and undo requests. A guest that reloads
 or drops rejoins with the same code, and leaving on purpose retires it.
 

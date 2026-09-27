@@ -123,6 +123,9 @@ guest connects to that id.
 - **Three ways in, all showing the same code:** the code in large type, a link
   (`https://app.example/join?id=CODE`), and a QR code of that link. The join page
   reads `?id=` on load and fills it in.
+- **Centre the QR code on the screen.** Centre it horizontally, and keep its
+  white quiet zone, so a phone pointed at the middle of the display finds it
+  without hunting.
 - **Both ends remember.** The host stores its code and reuses it after a reload;
   the guest stores the last code it connected with. A reload on either side then
   comes back to the same pairing without anybody reading the code again.
@@ -224,16 +227,22 @@ carry: objects, arrays, strings, numbers, booleans.
   and broadcasts the result. A guest does not show an action as done until a
   snapshot says it is.
 - **Send full snapshots, not diffs.** Send one on every change and on a timer
-  (twice a second suits most UIs). A lost message, a late joiner or a reconnect
-  then heals itself on the next snapshot, and nothing has to replay a history.
-  If the guest shows motion, stamp each snapshot with the host's time and
-  extrapolate between them so movement looks smooth instead of stepping.
+  of **20 a second** (every 50 ms, the tick rate Minecraft runs at). Over a
+  same-network link that is a trivial load: a 1 KB snapshot 20 times a second
+  is 20 KB/s, and a message takes a few milliseconds. A lost message, a late
+  joiner or a reconnect then heals itself on the next snapshot, and nothing has
+  to replay a history. If the guest shows motion, stamp each snapshot with the
+  host's time and extrapolate between them, so movement stays smooth through
+  the 50–200 ms stalls phone wifi takes now and then.
 - **The periodic snapshot is the heartbeat.** A channel to a device that simply
   vanished (wifi switched off, battery dead) can take tens of seconds to report
-  `close`. A guest that hears nothing for three snapshot intervals should say
-  the connection looks stale. For a host to notice silent guests, guests send a
-  small `ping` when they have nothing else to say, and the host drops any guest
-  it has not heard from in a similar window.
+  `close`. A guest that hears nothing for **2 seconds** should say the
+  connection looks stale. Measure it in time, not in missed intervals: at 20 a
+  second, three intervals is 150 ms, shorter than an ordinary wifi stall, and a
+  host tab in the background has its timers throttled to about once a second.
+  For a host to notice silent guests, guests send a small `ping` when they have
+  nothing else to say, and the host drops any guest it has not heard from in a
+  similar window.
 - **`bye` separates leaving on purpose from an accident.** A closed channel looks
   the same either way. Send `bye` while the channel is still open, then close
   with `link.close({ flush: true })`, which in 1.5.x queues the close behind
@@ -707,8 +716,9 @@ export async function restartWithFreshCode() {
   await startHosting();
 }
 
-// State on every change, plus a steady beat that doubles as the heartbeat.
-setInterval(() => host?.send(snapshot()), 500);
+// State on every change, plus a steady beat of 20 a second that doubles as the
+// heartbeat.
+setInterval(() => host?.send(snapshot()), 50);
 ```
 
 ### Wiring the guest
@@ -769,6 +779,9 @@ document.addEventListener("visibilitychange", () => {
 - [ ] The built output contains no `turn:` or `turns:`, and the WebRTC internals
       page shows STUN servers only and a `host` or `srflx` selected pair.
 - [ ] Same wifi, two devices: joins by typed code, by link, and by QR.
+- [ ] The QR code sits centred on the host's screen.
+- [ ] Connected on the same wifi: the guest receives about 20 snapshots a
+      second, and its moving parts glide rather than step.
 - [ ] Phone hotspot with the other device joined to it: joins.
 - [ ] Home wifi against a phone on mobile data: either joins, or reports
       `unreachable` within 15 seconds with the same-network message. It never

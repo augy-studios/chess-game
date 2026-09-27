@@ -1277,6 +1277,8 @@ export function loadSnapshot(snap) {
   const extends1 = next.length === old.length + 1 && old.every((m, i) => m === next[i]);
   const myUndosBefore = g.undos[mySide()];
   const wasOver = isOver();
+  const shown = () => JSON.stringify([g.gameId, g.serverSeed, g.takeback, g.end, g.undos, g.time]);
+  const before = shown();
   g.gameId = snap.gameId;
   if (snap.gameId) g.ticket = "ok";
   g.serverSeed = snap.serverSeed;
@@ -1314,6 +1316,10 @@ export function loadSnapshot(snap) {
     replayer.stop();
     resetResult();
     update();
+  } else if (shown() === before) {
+    // Most snapshots, at 20 a second: only the clock moved. A redraw would
+    // cut short a move sliding in, a drag, or the promotion picker.
+    renderClocks();
   } else {
     if (!wasOver && isOver() && g.end) {
       $("status").dataset.last =
