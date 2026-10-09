@@ -34,7 +34,12 @@ function getWorker() {
 let pendingHere = null;
 
 async function runHere(id, resolve) {
-  const { seed, difficulty, moves } = pendingHere;
+  const { seed, difficulty, moves, players, teams } = pendingHere;
+  if (players === 4) {
+    const { pickFour } = await import("./computer4.js");
+    resolve(pickFour(seed, difficulty, teams, moves));
+    return;
+  }
   const [{ Position }, { chooseMove }, { parseSeed, moveRandom }] = await Promise.all([
     import("./chess.js"),
     import("./ai.js"),
@@ -47,9 +52,10 @@ async function runHere(id, resolve) {
 }
 
 // Resolves with the move text, or null if a newer request replaced this one.
-export function requestMove(seedText, difficulty, moves) {
+// A four-player game passes { players: 4, teams }.
+export function requestMove(seedText, difficulty, moves, { players = 2, teams = false } = {}) {
   const id = ++latest;
-  const payload = { id, seed: seedText, difficulty, moves: moves.slice() };
+  const payload = { id, seed: seedText, difficulty, moves: moves.slice(), players, teams };
   return new Promise((resolve) => {
     const done = (text) => resolve(id === latest ? text : null);
     const w = getWorker();

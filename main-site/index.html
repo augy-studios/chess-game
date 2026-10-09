@@ -72,12 +72,21 @@
 
 <body>
     <div id="app" class="page">
-        <header class="topbar glass">
+        <!-- In full screen the header turns into sg-psi's floating tray: its
+             buttons in a column top right, which slides off the edge and
+             leaves the arrow tab to bring it back. -->
+        <header class="topbar glass" id="topbar">
             <div class="brand">
                 <img class="brand-icon" src="/XCG-192.png" alt="" width="28" height="28">
                 <h1 class="brand-name">uwuChess</h1>
             </div>
-            <div class="topbar-actions">
+            <button id="trayTab" class="tray-tab" type="button" aria-controls="trayButtons" aria-expanded="true" aria-label="Hide menu">
+                <span data-icon="chevron"></span>
+            </button>
+            <div class="topbar-actions" id="trayButtons">
+                <button id="fullBtn" class="icon-btn" type="button" aria-label="Full screen" title="Full screen">
+                    <span data-icon="expand"></span>
+                </button>
                 <button id="boardBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-label="Leaderboard">
                     <span data-icon="trophy"></span>
                 </button>
@@ -111,6 +120,23 @@
                     <p class="field-note" id="modeNote"></p>
                 </div>
 
+                <div class="field-group">
+                    <p class="field-label" id="playersLabel">Players</p>
+                    <div class="mode-toggle" id="playersPick" role="radiogroup" aria-labelledby="playersLabel">
+                        <button class="mode-btn" type="button" role="radio" aria-checked="true" data-players="2">Two players</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-players="4">Four players</button>
+                    </div>
+                </div>
+
+                <div class="field-group hidden" id="rulesGroup">
+                    <p class="field-label" id="rulesLabel">Rules</p>
+                    <div class="mode-toggle" id="rulesPick" role="radiogroup" aria-labelledby="rulesLabel">
+                        <button class="mode-btn" type="button" role="radio" aria-checked="true" data-rules="ffa">Free-for-all</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-rules="teams">Teams</button>
+                    </div>
+                    <p class="field-note" id="rulesNote"></p>
+                </div>
+
                 <div class="field-group" id="levelGroup">
                     <p class="field-label" id="levelLabel">Computer level</p>
                     <div class="level-pick" id="levelPick" role="radiogroup" aria-labelledby="levelLabel"></div>
@@ -125,7 +151,18 @@
                     </div>
                 </div>
 
-                <div class="field-group">
+                <div class="field-group hidden" id="colourGroup">
+                    <p class="field-label" id="colourLabel">Play as</p>
+                    <div class="colour-pick" id="colourPick" role="radiogroup" aria-labelledby="colourLabel">
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-colour="0"><span class="seat-dot" data-colour="0"></span>Red</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-colour="1"><span class="seat-dot" data-colour="1"></span>Blue</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-colour="2"><span class="seat-dot" data-colour="2"></span>Yellow</button>
+                        <button class="mode-btn" type="button" role="radio" aria-checked="false" data-colour="3"><span class="seat-dot" data-colour="3"></span>Green</button>
+                        <button class="mode-btn colour-any" type="button" role="radio" aria-checked="true" data-colour="seed"><span data-icon="dice"></span>Let the game decide</button>
+                    </div>
+                </div>
+
+                <div class="field-group" id="variantGroup">
                     <p class="field-label" id="variantLabel">Start position</p>
                     <div class="mode-toggle" id="variantPick" role="radiogroup" aria-labelledby="variantLabel">
                         <button class="mode-btn" type="button" role="radio" aria-checked="true" data-variant="960">Chess960</button>
@@ -158,7 +195,7 @@
                     <p class="field-note" id="timeNote"></p>
                 </div>
 
-                <div class="field-group">
+                <div class="field-group" id="seedGroup">
                     <label class="field-label" for="seedInput">Seed</label>
                     <div class="guess">
                         <input id="seedInput" class="field seed-field" type="text" placeholder="Random" maxlength="20"
@@ -193,6 +230,8 @@
                     <div class="qr" id="hostQr"></div>
                     <button id="copyLinkBtn" class="btn btn-quiet pill" type="button"><span data-icon="copy"></span><span id="copyLinkLabel">Copy link</span></button>
                 </div>
+                <ul id="seatList" class="seat-list hidden" aria-label="Seats"></ul>
+                <button id="netStartBtn" class="btn btn-primary pill start-btn hidden" type="button"><span data-icon="play"></span><span id="netStartLabel">Start game</span></button>
                 <p id="netStatus" class="net-status" role="status" aria-live="polite"></p>
                 <p class="field-note">Both devices need to be on the same wifi, or one sharing a hotspot with the other.</p>
                 <div class="round-actions">
@@ -209,12 +248,16 @@
                     <span class="chip" id="turnChip"></span>
                     <span class="chip" id="scoreChip"></span>
                     <span class="chip clock" id="gameClock" role="timer" aria-label="Game clock"></span>
-                    <button class="chip chip-btn" id="seedChip" type="button" aria-label="Copy seed"></button>
+                    <button class="chip chip-btn two-only" id="seedChip" type="button" aria-label="Copy seed"></button>
                 </div>
 
-                <div class="player-row" id="topRow"><span class="player-name" id="topName"></span><span class="captured" id="topCaptured"></span><span class="clock" id="topClock" role="timer"></span></div>
-                <div class="board-wrap" id="board"></div>
-                <div class="player-row" id="bottomRow"><span class="player-name" id="bottomName"></span><span class="captured" id="bottomCaptured"></span><span class="clock" id="bottomClock" role="timer"></span></div>
+                <div class="player-row two-only" id="topRow"><span class="player-name" id="topName"></span><span class="captured" id="topCaptured"></span><span class="clock" id="topClock" role="timer"></span></div>
+                <div class="board-wrap two-only" id="board"></div>
+                <div class="player-row two-only" id="bottomRow"><span class="player-name" id="bottomName"></span><span class="captured" id="bottomCaptured"></span><span class="clock" id="bottomClock" role="timer"></span></div>
+
+                <!-- Four-player games: who is playing, then the cross board. -->
+                <div class="seats4 four-only" id="seats4"></div>
+                <div class="board-wrap board4-wrap four-only" id="board4"></div>
 
                 <p id="status" class="status" role="status" aria-live="polite"></p>
 
@@ -222,7 +265,7 @@
                     <span class="net-dot" id="netDot"></span><span id="netBarText"></span>
                 </div>
 
-                <div id="takeback" class="takeback hidden" role="alert">
+                <div id="takeback" class="takeback two-only hidden" role="alert">
                     <p id="takebackText"></p>
                     <div class="round-actions">
                         <button id="takebackYes" class="btn btn-primary pill" type="button">Accept</button>
@@ -262,13 +305,13 @@
                     <h3 id="resultTitle" class="result-title" tabindex="-1"></h3>
                     <p id="resultReason" class="result-reason"></p>
                     <p id="resultScore" class="result-score"></p>
-                    <div class="seed-row">
+                    <div class="seed-row two-only">
                         <span class="seed-text" id="resultSeed"></span>
                         <button id="copySeedBtn" class="btn btn-quiet pill" type="button"><span data-icon="copy"></span><span id="copySeedLabel">Copy seed</span></button>
                         <button id="shareBtn" class="btn btn-primary pill" type="button"><span data-icon="share"></span><span id="shareLabel">Share replay</span></button>
                     </div>
 
-                    <form id="submitForm" class="submit" autocomplete="off">
+                    <form id="submitForm" class="submit two-only" autocomplete="off">
                         <label for="nameInput" class="submit-label">Add this game to the leaderboard</label>
                         <div class="guess">
                             <input id="nameInput" class="field" type="text" placeholder="Your name" maxlength="20"
@@ -279,7 +322,7 @@
                         <p class="submit-note">Names are shared: anyone who picks the same one shares its entry.</p>
                     </form>
                     <p id="notScored" class="not-scored hidden"></p>
-                    <div id="submitted" class="submitted hidden" role="status">
+                    <div id="submitted" class="submitted two-only hidden" role="status">
                         <span class="ok-icon" data-icon="check"></span>
                         <p id="submittedText"></p>
                     </div>

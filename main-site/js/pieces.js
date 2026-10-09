@@ -62,3 +62,21 @@ export function pieceSvg(piece) {
 export function typeSvg(type, colour) {
   return pieceSvg(type | (colour << 3));
 }
+
+/* ---- four-player chess ----
+   The same shapes in the four armies' colours, and grey for the pieces of a
+   player who is out. Also fixed-meaning colours, from the --piece4-* tokens. */
+
+const ARMIES = ["red", "blue", "yellow", "green", "grey"];
+
+export function pieceName4(piece) {
+  return `${ARMIES[colourOf(piece)]} ${NAMES[typeOf(piece)]}`;
+}
+
+export function pieceSvg4(piece) {
+  return `<svg class="piece-art p4 ${ARMIES[colourOf(piece)]}" viewBox="0 0 45 45" aria-hidden="true" focusable="false"><g>${SHAPES[typeOf(piece)]}</g></svg>`;
+}
+
+export function typeSvg4(type, colour) {
+  return pieceSvg4(type | (colour << 3));
+}

@@ -24,15 +24,19 @@ the browser and the server always agree on a game.
 | File | What it does |
 | --- | --- |
 | `chess.js` | The rules. 0x88 board, legal moves, Chess960 castling, check, mate, stalemate, the fifty-move rule, threefold repetition, too little material, notation. |
+| `chess4.js` | Four-player rules on the 14 by 14 cross board, and a four-player game replayed from its entries. Not imported by the API. |
+| `ai4.js`, `computer4.js` | The four-player computer, a best-reply search, and its entry point for the worker. |
 | `ai.js` | The computer: alpha-beta search with quiescence, and difficulty (below). Deterministic. |
 | `seed.js` | Seeds, and the integer random numbers everything draws from. |
 | `record.js` | Replays a seed and a move list into positions and notation. |
 | `score.js` | Scoring (below). |
 | `clock.js` | Time limits and the clock, as plain data that saves and travels. |
 | `ai-worker.js`, `computer.js` | The computer's Web Worker, and the page's side of it. |
-| `board.js` | The board on screen: tap, drag or keyboard, sliding moves, the grey box on the square a piece left. |
+| `board.js` | The board on screen, 8 by 8 or the four-player cross: tap, drag or keyboard, sliding moves, the grey box on the square a piece left, and zoom on the four-player board. |
 | `pieces.js` | The pieces, as inline SVG drawn for this app. |
 | `game.js` | The game screen: setup, play, undo, resign, result, submit, saving. |
+| `game4.js` | Four-player games on the same screen, which `game.js` hands its buttons to while one is on. |
+| `fullscreen.js` | Full screen, and the header turning into the floating tray. |
 | `replay.js` | The instant replay. |
 | `net.js` | Pairing over PeerJS, STUN only, from `STUN-p2p-spec.md`. |
 | `multiplayer.js` | Network games on top of `net.js`: hosting, joining, and the messages. |
@@ -44,7 +48,34 @@ the browser and the server always agree on a game.
 
 **Modes.** Against the computer; two people taking turns on this device, with
 the board turning for each; or two devices on one network, one hosting with a
-six character code, a link or a QR code, and the other joining.
+six character code, a link or a QR code, and the other joining. Each also
+comes in four players, below.
+
+**Four players.** The 14 by 14 cross board with its corners cut away, Red,
+Blue, Yellow and Green moving in that order, clockwise. Free-for-all: a
+player who is checkmated, stalemated, resigns or runs out of time is out,
+their pieces stay as grey blockers anyone can take, and the last king
+standing wins. Teams: Red and Yellow against Blue and Green, partners
+opposite, and the first player out loses it for their team (a stalemate is a
+draw). Pawns promote at the centre line, on the eighth rank counted from
+their own side; there is no en passant; and a king left attacked by somebody
+else's move can be taken, which puts its player out. Against the computer,
+three computers play the other seats, and undo takes back your last move and
+their replies. On one device, four people take turns. Over the network, up to
+three guests take seats in a lobby, the host starts when ready, and the
+computer, running on the host's device, plays any empty seat; a guest who
+leaves on purpose hands their seat to the computer, and one who drops comes
+back to it with the same code. Network four-player games have no undo. On
+your turn the board zooms, by pinching, the buttons in its empty corner, or a
+trackpad, and dragging an empty square moves the view; it zooms back out when
+your turn ends. Four-player games are not scored, have no seed to paste, and
+have no replay link, but end with the same instant replay.
+
+**Full screen.** The button in the header. The header and footer go, the
+board grows to the screen's height, and the header's buttons become a
+floating tray top right that slides away to an arrow tab (sg-psi's). Where
+the browser cannot go full screen, as Safari on iPhone, it fills the window
+instead.
 
 **Seeds.** A seed looks like `960-BXK4-M9TR`. It picks the start position,
 one of the 960 Chess960 positions or, with `STD-`, the ordinary one. It also
@@ -170,7 +201,11 @@ on the same network**: the same wifi, or one sharing a hotspot with the
 other. PeerJS loads from cdnjs only when somebody hosts or joins, and is
 never cached. The host holds the game and sends it in full 20 times a second;
 the guest sends moves, resignations and undo requests. A guest that reloads
-or drops rejoins with the same code, and leaving on purpose retires it.
+or drops rejoins with the same code, and leaving on purpose retires it. Four
+players work the same way with up to three guests, each sent its own
+snapshot; every guest's connection carries a client id kept in its browser,
+which is how it gets its seat back. The protocol is version 2: a guest on an
+older build is told to reload.
 
 ## Offline and updates
 

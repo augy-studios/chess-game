@@ -1,7 +1,8 @@
 # uwuChess
 
 Chess against a computer that really plays, from Beginner to Master, on one
-device between two people, or between two devices on the same network. Every
+device between two people, or between two devices on the same network. Also
+four-player chess, free-for-all or teams, in all three. Every
 game has a seed that can be copied and played again, ends with an instant
 replay, and can go on a leaderboard.
 
@@ -55,6 +56,7 @@ node scripts/check-sw.mjs          # the worker only activates when asked
 node scripts/check-precache.mjs    # everything the app loads works offline
 node scripts/check-theme.mjs       # pre-paint script matches js/theme.js
 node scripts/test-engine.mjs       # rules: perft, Chess960 castling, draws
+node scripts/test-engine4.mjs      # four-player rules, and computer games to the end
 node scripts/test-verify.mjs       # the API's game check, without a database
 node scripts/test-ai.mjs           # same seed, same game; speed per level
 ```

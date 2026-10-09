@@ -6,7 +6,8 @@
 //
 // The clock is plain data, so it can be saved, sent to the other device and
 // restored: { used: [white, black], running: side or -1, since, start,
-// stopped }, times in epoch milliseconds. It runs on the wall clock, so a
+// stopped }, times in epoch milliseconds. A four-player game's `used` has
+// four entries, one per colour. It runs on the wall clock, so a
 // game left open keeps counting, as a real clock would.
 
 export const PRESET_MINUTES = [1, 3, 5, 10, 15, 30];
@@ -24,8 +25,8 @@ export function validTime(time) {
   );
 }
 
-export function newClock(now) {
-  return { used: [0, 0], running: -1, since: null, start: now, stopped: null };
+export function newClock(now, players = 2) {
+  return { used: new Array(players).fill(0), running: -1, since: null, start: now, stopped: null };
 }
 
 // Milliseconds `side` has left; for a shared clock, the game has left.
@@ -73,14 +74,16 @@ export function clockFromWire(wire, now) {
   };
 }
 
-export function validWireClock(w) {
+export function validWireClock(w, players = 2) {
   const n = (x) => Number.isFinite(x) && x >= 0 && x < 1e9;
   return (
     Boolean(w) &&
     Array.isArray(w.used) &&
-    w.used.length === 2 &&
+    w.used.length === players &&
     w.used.every(n) &&
-    (w.running === -1 || w.running === 0 || w.running === 1) &&
+    Number.isInteger(w.running) &&
+    w.running >= -1 &&
+    w.running < players &&
     n(w.elapsed) &&
     n(w.total) &&
     typeof w.stopped === "boolean"

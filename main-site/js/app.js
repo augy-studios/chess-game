@@ -5,6 +5,7 @@ import { initGame, readReplayLink } from "./game.js";
 import { initMultiplayer } from "./multiplayer.js";
 import { initLeaderboard } from "./leaderboard.js";
 import { initSettings } from "./settings.js";
+import { initFullscreen } from "./fullscreen.js";
 
 /* Theme modal, per uwuapps-theme.md section 6. */
 
@@ -104,6 +105,7 @@ function boot() {
   updateThemeButtonIcon();
   buildThemeModal();
   wireModals();
+  initFullscreen();
   initLeaderboard();
   initSettings();
   const joinCode = takeJoinCode();

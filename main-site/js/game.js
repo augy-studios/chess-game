@@ -31,7 +31,8 @@ import { api } from "./api.js";
 import { getSettings, onSettingsChange, saveSettings } from "./settings.js";
 import { openLeaderboard } from "./leaderboard.js";
 import { typeSvg } from "./pieces.js";
-import { Replay } from "./replay.js";
+import { Replay, replaySource } from "./replay.js";
+import * as four from "./game4.js";
 import { copyText, hydrateIcons, store } from "./ui.js";
 import { confetti } from "./confetti.js";
 
@@ -63,7 +64,20 @@ let watching = null; // a shared replay being watched: { seed, moves, end, meta 
 
 // time: 0 for none, minutes for a preset, or "custom" for `custom` minutes.
 // split: "each" for a clock per player, "total" for one for the game.
-const setup = { mode: "computer", level: 3, side: "seed", variant: "960", time: 0, custom: 20, split: "each" };
+// players: 2 or 4. A four-player game has `rules` ("ffa" or "teams") and a
+// `colour` ("0" to "3", or "seed") instead of a side, variant and seed.
+const setup = {
+  mode: "computer",
+  players: 2,
+  level: 3,
+  side: "seed",
+  variant: "960",
+  time: 0,
+  custom: 20,
+  split: "each",
+  rules: "ffa",
+  colour: "seed",
+};
 
 function loadSetup() {
   const saved = store.getJSON(SETUP_STORAGE) ?? {};
@@ -74,6 +88,9 @@ function loadSetup() {
   if (saved.time === 0 || saved.time === "custom" || PRESET_MINUTES.includes(saved.time)) setup.time = saved.time;
   if (Number.isInteger(saved.custom) && saved.custom >= MIN_MINUTES && saved.custom <= MAX_MINUTES) setup.custom = saved.custom;
   if (["each", "total"].includes(saved.split)) setup.split = saved.split;
+  if (saved.players === 2 || saved.players === 4) setup.players = saved.players;
+  if (["ffa", "teams"].includes(saved.rules)) setup.rules = saved.rules;
+  if (["0", "1", "2", "3", "seed"].includes(saved.colour)) setup.colour = saved.colour;
 }
 
 function saveSetup() {
@@ -86,11 +103,31 @@ const MODE_NOTES = {
   network: "Play someone on the same wifi, or sharing a hotspot. Scored when started online.",
 };
 
+const MODE_NOTES_4 = {
+  computer: "You and three computers. Four-player games are not scored.",
+  local: "Four players taking turns on this device. Not scored.",
+  network: "Up to four devices on the same wifi, or sharing a hotspot. The computer plays any empty seat. Not scored.",
+};
+
+const RULES_NOTES = {
+  ffa: "Checkmated, stalemated, resigned or out of time and you are out; your pieces stay as grey blockers. Last king standing wins.",
+  teams: "Red and Yellow against Blue and Green, partners opposite. The first player out loses it for their team.",
+};
+
 function timeNote() {
   if (setup.time === 0) return "";
   const min = setup.time === "custom" ? setup.custom : setup.time;
   if (setup.split === "total") {
-    return `${min} minutes for the whole game. When it runs out, whoever has more material wins.`;
+    return `${min} minutes for the whole game. When it runs out, whoever has ${setup.players === 4 ? "the most" : "more"} material wins.`;
+  }
+  if (setup.players === 4) {
+    const each =
+      setup.mode === "computer"
+        ? `You have ${min} minutes; the computers' time does not count.`
+        : setup.mode === "network"
+          ? `Each player has ${min} minutes; computer seats have no clock.`
+          : `Each player has ${min} minutes of their own.`;
+    return `${each} Running out puts you out${setup.rules === "teams" ? ", and loses it for your team" : ""}.`;
   }
   const each =
     setup.mode === "computer"
@@ -108,13 +145,24 @@ function renderSetup() {
   check("#variantPick [data-variant]", "variant", setup.variant);
   check("#timePick [data-time]", "time", setup.time);
   check("#timeSplitPick [data-split]", "split", setup.split);
-  $("levelGroup").classList.toggle("hidden", setup.mode !== "computer");
-  $("sideGroup").classList.toggle("hidden", setup.mode === "local");
+  check("#playersPick [data-players]", "players", setup.players);
+  check("#rulesPick [data-rules]", "rules", setup.rules);
+  check("#colourPick [data-colour]", "colour", setup.colour);
+  const fourUp = setup.players === 4;
+  $("levelGroup").classList.toggle("hidden", !(setup.mode === "computer" || (fourUp && setup.mode === "network")));
+  $("levelLabel").textContent = fourUp && setup.mode === "network" ? "Computer level, for empty seats" : "Computer level";
+  $("sideGroup").classList.toggle("hidden", fourUp || setup.mode === "local");
   $("sideLabel").textContent = setup.mode === "network" ? "Host plays as" : "Play as";
+  $("colourGroup").classList.toggle("hidden", !fourUp || setup.mode === "local");
+  $("colourLabel").textContent = setup.mode === "network" ? "Host plays as" : "Play as";
+  $("rulesGroup").classList.toggle("hidden", !fourUp);
+  $("rulesNote").textContent = RULES_NOTES[setup.rules];
+  $("variantGroup").classList.toggle("hidden", fourUp);
+  $("seedGroup").classList.toggle("hidden", fourUp);
   $("joinForm").classList.toggle("hidden", setup.mode !== "network");
   $("startLabel").textContent = launching ? "Starting" : setup.mode === "network" ? "Host a game" : "Start game";
   $("startBtn").disabled = launching;
-  $("modeNote").textContent = MODE_NOTES[setup.mode];
+  $("modeNote").textContent = (fourUp ? MODE_NOTES_4 : MODE_NOTES)[setup.mode];
   $("customTime").classList.toggle("hidden", setup.time !== "custom");
   if (document.activeElement !== $("customMinutes")) $("customMinutes").value = String(setup.custom);
   $("timeSplitPick").classList.toggle("hidden", setup.time === 0);
@@ -146,6 +194,7 @@ function seedFromField() {
 }
 
 function onStart() {
+  if (setup.players === 4) return onStartFour();
   const typed = $("seedInput").value.trim() !== "";
   const seed = typed ? seedFromField() : null;
   if (typed && !seed) {
@@ -170,6 +219,21 @@ function onStart() {
     sideChoice: setup.mode === "local" ? null : sideChoice,
     time,
   });
+}
+
+function onStartFour() {
+  const time = timeFromSetup();
+  if (time === undefined) {
+    $("timeNote").textContent = `Enter a whole number of minutes, ${MIN_MINUTES} to ${MAX_MINUTES}.`;
+    return shake($("customMinutes"));
+  }
+  const teams = setup.rules === "teams";
+  const colourChoice = setup.colour === "seed" ? null : Number(setup.colour);
+  if (setup.mode === "network") {
+    net?.host({ players: 4, teams, level: setup.level, side: colourChoice, time });
+    return;
+  }
+  four.launch({ mode: setup.mode, teams, level: setup.level, colourChoice: setup.mode === "local" ? null : colourChoice, time });
 }
 
 function setLaunching(on) {
@@ -223,6 +287,7 @@ export async function launch(opts) {
 // firstSide?, gameId?, moves?, undos?, end?, submitted?, ticket?,
 // serverSeed?, time?, clock?, startedAt?, elapsed? }
 export function startGame(opts) {
+  four.clear();
   cancelMove();
   thinking = false;
   replayer.stop();
@@ -597,6 +662,7 @@ function onLeave() {
 
 // Drops the game on screen and shows the setup.
 export function endGame() {
+  four.clear();
   cancelMove();
   thinking = false;
   replayer.stop();
@@ -832,7 +898,7 @@ function finish(fresh) {
   $("result").classList.remove("hidden");
   $("replayBar").classList.remove("hidden");
   hydrateIcons($("play"));
-  replayer.load(g.seed, g.moves, { orientation: orientation(), coords: s.coords }, { autoplay: !fresh && s.auto_replay });
+  replayer.load(replaySource(board, g.seed, g.moves), { orientation: orientation(), coords: s.coords }, { autoplay: !fresh && s.auto_replay });
   if (!fresh) $("resultTitle").focus({ preventScroll: true });
 
   // A win as it happens, not on a reload of one. On a shared device somebody
@@ -1040,6 +1106,7 @@ export function readReplayLink(params) {
 }
 
 function watch(link) {
+  four.clear();
   cancelMove();
   thinking = false;
   g = null;
@@ -1093,7 +1160,7 @@ function watch(link) {
   $("result").classList.remove("hidden");
   $("replayBar").classList.remove("hidden");
   hydrateIcons($("play"));
-  replayer.load(link.seed, link.moves, { orientation: bottom, coords: getSettings().coords }, { autoplay: true });
+  replayer.load(replaySource(board, link.seed, link.moves), { orientation: bottom, coords: getSettings().coords }, { autoplay: true });
 }
 
 // Leaves a shared replay: the address loses the link, and the page goes
@@ -1105,7 +1172,7 @@ function closeWatch({ show = true } = {}) {
   for (const key of ["watch", "seed", "game", "end"]) params.delete(key);
   const rest = params.toString();
   history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
-  if (show && !resume()) {
+  if (show && !four.resume() && !resume()) {
     showPanel("setup");
     renderSetup();
   }
@@ -1380,9 +1447,30 @@ function pick(id, attr, key, parse = (v) => v) {
   });
 }
 
+// A four-player game is starting: the two-player one, or a shared replay,
+// goes.
+function dropTwo() {
+  if (watching) closeWatch({ show: false });
+  cancelMove();
+  thinking = false;
+  disarmResign();
+  disarmLeave();
+  g = null;
+  store.remove(GAME_STORAGE);
+}
+
 export function initGame({ joinCode, replayLink: shared } = {}) {
   board = new BoardView($("board"), { onMove: (text) => onBoardMove(text) });
-  replayer = new Replay(board);
+  replayer = new Replay();
+  four.initGame4({
+    replayer,
+    showPanel,
+    showSetup: () => {
+      showPanel("setup");
+      renderSetup();
+    },
+    dropTwo,
+  });
   loadSetup();
   buildLevelPick();
 
@@ -1392,6 +1480,9 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
   pick("variantPick", "variant", "variant");
   pick("timePick", "time", "time", (v) => (v === "custom" ? "custom" : Number(v)));
   pick("timeSplitPick", "split", "split");
+  pick("playersPick", "players", "players", Number);
+  pick("rulesPick", "rules", "rules");
+  pick("colourPick", "colour", "colour");
   $("customMinutes").addEventListener("input", (e) => {
     const n = Number(e.target.value);
     if (Number.isInteger(n) && n >= MIN_MINUTES && n <= MAX_MINUTES) {
@@ -1421,20 +1512,22 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
   });
   $("startBtn").addEventListener("click", onStart);
 
-  $("undoBtn").addEventListener("click", onUndo);
+  // While a four-player game is on, game4.js answers these.
+  $("undoBtn").addEventListener("click", () => (four.active() ? four.onUndo() : onUndo()));
   $("flipBtn").addEventListener("click", () => {
+    if (four.active()) return four.onFlip();
     if (!g) return;
     g.flipped = !g.flipped;
     update();
   });
-  $("resignBtn").addEventListener("click", onResign);
-  $("leaveBtn").addEventListener("click", onLeave);
+  $("resignBtn").addEventListener("click", () => (four.active() ? four.onResign() : onResign()));
+  $("leaveBtn").addEventListener("click", () => (four.active() ? four.onLeave() : onLeave()));
   $("takebackYes").addEventListener("click", () => net?.answerTakeback(true));
   $("takebackNo").addEventListener("click", () => net?.answerTakeback(false));
 
   $("submitForm").addEventListener("submit", onSubmit);
-  $("againBtn").addEventListener("click", onAgain);
-  $("newGameBtn").addEventListener("click", () => (watching ? closeWatch() : endGame()));
+  $("againBtn").addEventListener("click", () => (four.active() ? four.onAgain() : onAgain()));
+  $("newGameBtn").addEventListener("click", () => (four.active() ? four.backToSetup() : watching ? closeWatch() : endGame()));
   $("resultBoardBtn").addEventListener("click", () => openLeaderboard());
   $("shareBtn").addEventListener("click", onShare);
   const shownSeed = () => (watching ?? g)?.seed;
@@ -1453,7 +1546,11 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
   });
 
   onSettingsChange(() => {
-    if (watching || (g && isOver())) {
+    if (four.active() && !four.state().over) {
+      four.refresh();
+      return;
+    }
+    if (watching || four.active() || (g && isOver())) {
       replayer.view.coords = getSettings().coords;
       replayer.show(replayer.index, null);
       return;
@@ -1463,9 +1560,13 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
 
   // Clocks tick five times a second; a hidden tab is caught up when it is
   // shown again, and a clock that ran out meanwhile ends the game then.
-  setInterval(tickClock, 200);
+  const tickBoth = () => {
+    tickClock();
+    four.tick();
+  };
+  setInterval(tickBoth, 200);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") tickClock();
+    if (document.visibilityState === "visible") tickBoth();
   });
 
   renderSetup();
@@ -1485,7 +1586,7 @@ export function initGame({ joinCode, replayLink: shared } = {}) {
     closeWatch({ show: false });
     $("seedNote").textContent = "That replay link is damaged or incomplete, so it cannot be played back.";
   }
-  if (!resume()) showPanel("setup");
+  if (!four.resume() && !resume()) showPanel("setup");
 }
 
 function onBoardMove(text) {

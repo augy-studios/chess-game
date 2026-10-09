@@ -385,8 +385,9 @@ body {
 }
 .board {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr);
+  /* --size is the geometry's: 8, or 14 for four players. */
+  grid-template-columns: repeat(var(--size, 8), 1fr);
+  grid-template-rows: repeat(var(--size, 8), 1fr);
   width: 100%;
   height: 100%;
   border-radius: 14px;
@@ -870,6 +871,269 @@ body {
   color: var(--muted-strong);
 }
 
+/* ---- four-player chess ----
+   The armies' colours are fixed-meaning, like the two-player pieces: Red is
+   red whatever the theme. Grey is a player who is out. */
+:root {
+  --piece4-red: #e0574d;
+  --piece4-blue: #4f80e1;
+  --piece4-yellow: #f2c94c;
+  --piece4-green: #44ad62;
+  --piece4-grey: #a7aeaa;
+  --piece4-line: #1a1f1c;
+  --piece4-detail: #f5f7f5;
+}
+[data-colour="0"] { --seat-colour: var(--piece4-red); }
+[data-colour="1"] { --seat-colour: var(--piece4-blue); }
+[data-colour="2"] { --seat-colour: var(--piece4-yellow); }
+[data-colour="3"] { --seat-colour: var(--piece4-green); }
+
+.piece-art.p4 g { stroke: var(--piece4-line); }
+.piece-art.red g { fill: var(--piece4-red); }
+.piece-art.blue g { fill: var(--piece4-blue); }
+.piece-art.yellow g { fill: var(--piece4-yellow); }
+.piece-art.green g { fill: var(--piece4-green); }
+.piece-art.grey g { fill: var(--piece4-grey); }
+.piece-art.p4 .detail { stroke: var(--piece4-detail); }
+.piece-art.yellow .detail,
+.piece-art.grey .detail { stroke: var(--piece4-line); }
+.piece-art.p4 .eye { fill: var(--piece4-detail); stroke: none; }
+.piece-art.yellow .eye,
+.piece-art.grey .eye { fill: var(--piece4-line); }
+
+/* Only one kind of game's parts show at a time. */
+.play.four .two-only { display: none !important; }
+.play:not(.four) .four-only { display: none !important; }
+
+/* Who is playing: a card per colour, the one to move ringed in its colour. */
+.seats4,
+.seat-list {
+  width: 100%;
+  max-width: 640px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  list-style: none;
+}
+.seat-list { max-width: 460px; grid-template-columns: repeat(2, 1fr); }
+.seat4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 12px;
+  background: var(--surface-strong);
+  border: 1px solid var(--surface-border);
+  text-align: left;
+  transition: box-shadow 0.15s ease, opacity 0.15s ease;
+}
+.seat4[data-turn] { box-shadow: inset 0 0 0 2px var(--seat-colour), 0 0 0 1px var(--seat-colour); }
+.seat4[data-out] { opacity: 0.55; }
+.seat-dot {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--seat-colour);
+  border: 1px solid color-mix(in srgb, var(--piece4-line) 45%, transparent);
+}
+.seat-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.2;
+}
+.seat-text b { font-weight: normal; font-size: 0.85rem; color: var(--ink); }
+.seat-text small {
+  font-size: 0.7rem;
+  color: var(--muted-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seat4 .clock {
+  min-width: 3.4em;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+}
+
+.colour-pick {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--surface);
+}
+.colour-pick .colour-any { grid-column: 1 / -1; }
+
+/* The cross board. The corners are missing squares, so it has no frame of
+   its own; the squares carry it. */
+.board4-wrap { width: min(100%, 640px); }
+.board-viewport {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  /* Pinching zooms the board, not the page. */
+  touch-action: none;
+}
+.board4-wrap .board {
+  width: calc(var(--zoom, 1) * 100%);
+  height: calc(var(--zoom, 1) * 100%);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.sq.void {
+  background: none;
+  cursor: default;
+  pointer-events: none;
+}
+.board4-wrap .coord { font-size: calc(clamp(7px, 1.3vw, 10px) * var(--zoom, 1)); }
+.board4-wrap .coord.rank { top: 2px; left: 2px; }
+.board4-wrap .coord.file { bottom: 1px; right: 2px; }
+.board4-wrap .sq.was::after { border-radius: 4px; border-width: 1.5px; }
+.board4-wrap .sq.selected::after { box-shadow: inset 0 0 0 3px var(--brand-ink); }
+.board4-wrap .sq.target-capture::before { border-width: 3px; }
+.board4-wrap .sq.target-castle::before { border-width: 2px; border-radius: 6px; }
+.board4-wrap.zoomed .board-viewport { cursor: grab; }
+
+/* Filling the bottom right corner, where the board has no squares, at
+   whatever size the board is. */
+.zoom-controls {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  width: calc(300% / 14);
+  height: calc(300% / 14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5%;
+}
+.zoom-controls .icon-btn {
+  width: min(38px, 44%);
+  height: auto;
+  aspect-ratio: 1;
+  background: var(--surface);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--shadow);
+}
+.board4-wrap .hidden { display: none !important; }
+
+.move-list.four { grid-template-columns: 1fr; }
+.move-list.four li { grid-template-columns: 2.2em repeat(4, 1fr); gap: 2px; }
+.ply-btn[data-colour] {
+  border-left: 3px solid var(--seat-colour);
+  border-radius: 3px 6px 6px 3px;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- full screen ----
+   The header turns into sg-psi's floating tray: its buttons in a column of
+   glass top right, with an arrow tab beside them. Collapsed, the column
+   slides off the right edge and the tab is left peeking out. Below the
+   modals (50) and the update bar's page flow. */
+:root {
+  --glass-btn: 44px;
+  --hud-edge: max(16px, calc(env(safe-area-inset-right) + 16px));
+  --hud-top: max(14px, calc(env(safe-area-inset-top) + 14px));
+  --board-room: 190px;
+}
+.tray-tab { display: none; }
+
+.is-full .foot { display: none; }
+.is-full .topbar {
+  --tray-shift: calc(var(--glass-btn) + 8px + var(--hud-edge));
+  position: fixed;
+  z-index: 40;
+  top: var(--hud-top);
+  right: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.is-full .topbar.collapsed { transform: translateX(var(--tray-shift)); }
+.is-full .brand { display: none; }
+.is-full .tray-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: var(--glass-btn);
+  border-radius: 12px;
+  background: var(--surface);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  transition: border-radius 0.22s ease;
+}
+.tray-tab > [data-icon] { display: inline-flex; }
+.tray-tab svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.22s ease;
+}
+/* At the edge it is a tab, flat on the side the screen cuts off. */
+.is-full .topbar.collapsed .tray-tab { border-radius: 12px 0 0 12px; border-right: none; }
+.is-full .topbar.collapsed .tray-tab svg { transform: rotate(180deg); }
+.is-full .topbar-actions {
+  flex-direction: column;
+  gap: 8px;
+  margin-right: var(--hud-edge);
+  transition: opacity 0.22s ease;
+}
+.is-full .topbar.collapsed .topbar-actions { opacity: 0; }
+.is-full .topbar-actions .icon-btn {
+  width: var(--glass-btn);
+  height: var(--glass-btn);
+  background: var(--surface);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--shadow);
+}
+.is-full .topbar-actions .icon-btn:hover { background: var(--surface-strong); }
+.is-full .topbar-actions .icon-btn svg { width: 22px; height: 22px; }
+
+/* The board as big as the screen's height allows, with room left for the
+   chips and names around it. */
+.is-full .page { max-width: 1100px; }
+.is-full .board-wrap,
+.is-full .player-row,
+.is-full .seats4,
+.is-full .replay {
+  max-width: none;
+  width: min(100%, max(300px, calc(100vh - var(--board-room))));
+  width: min(100%, max(300px, calc(100dvh - var(--board-room))));
+}
+.is-full .play.four { --board-room: 170px; }
+
+/* Where the column would run under the tray, it makes room for it; the
+   arrow tab alone only needs a little. */
+@media (max-width: 920px) {
+  .is-full .page { padding-right: 32px; }
+  /* The tab, the gap beside it, a button and the edge. */
+  .is-full.tray-open .page { padding-right: calc(24px + 8px + var(--glass-btn) + var(--hud-edge) + 4px); }
+}
+
 /* Update bar, per update-bar-spec.md. Quieter than the header, full width,
    tinted enough to read as a notice. */
 .update-notice {
@@ -923,6 +1187,9 @@ body {
   .level-btn small { font-size: 0.62rem; }
   .mode-toggle.thirds .mode-btn { font-size: 0.78rem; padding: 8px 4px; }
   .mode-toggle.thirds .mode-btn svg { display: none; }
+  .seats4 { grid-template-columns: repeat(2, 1fr); }
+  .colour-pick .mode-btn { font-size: 0.78rem; padding: 8px 4px; gap: 4px; }
+  .move-list.four li { grid-template-columns: 1.8em repeat(4, 1fr); }
   .result-title { font-size: 1.45rem; }
   .code-big { font-size: 2rem; }
   .update-notice-inner { flex-wrap: wrap; }

@@ -1,13 +1,19 @@
 // The computer thinks here, off the page's thread, so the board stays
 // responsive at Master level. It rebuilds the game from the seed and the
-// moves, exactly as the API does when it checks a game.
+// moves, exactly as the API does when it checks a game. Four-player games
+// arrive with `players: 4` and are rebuilt by chess4.js.
 
 import { Position } from "./chess.js";
 import { chooseMove } from "./ai.js";
 import { parseSeed, moveRandom } from "./seed.js";
+import { pickFour } from "./computer4.js";
 
 self.addEventListener("message", (event) => {
-  const { id, seed: seedText, difficulty, moves } = event.data ?? {};
+  const { id, seed: seedText, difficulty, moves, players, teams } = event.data ?? {};
+  if (players === 4) {
+    self.postMessage({ id, text: pickFour(seedText, difficulty, teams, moves) });
+    return;
+  }
   const seed = parseSeed(seedText);
   if (!seed) {
     self.postMessage({ id, text: null });

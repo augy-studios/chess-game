@@ -12,7 +12,8 @@ const PEERJS_URL = "https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.m
 const PEER_PREFIX = "uwuchess-";
 const CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXYZ23456789";
 export const CODE_LENGTH = 6;
-export const PROTOCOL_VERSION = 1;
+// 2: four-player games. A guest on an older build is told to reload.
+export const PROTOCOL_VERSION = 2;
 const CONNECT_TIMEOUT_MS = 15000;
 
 // STUN only. Supplying `config` replaces PeerJS's default, which includes a
@@ -163,9 +164,13 @@ export class Host extends Connection {
 
     this.peer.on("open", () => this.refreshStatus());
     this.peer.on("connection", (link) => {
+      const client = link.metadata?.client;
       if (this.maxGuests === 1) {
         // The newcomer replaces the incumbent.
         for (const old of [...this.links.values()]) this.drop(old);
+      } else if (client && [...this.links.values()].some((old) => old.metadata?.client === client)) {
+        // The same browser coming back: its old link is dead or dying.
+        for (const old of [...this.links.values()]) if (old.metadata?.client === client) this.drop(old);
       } else if (this.links.size >= this.maxGuests) {
         link.on("open", () => {
           link.send({ type: "full" });
@@ -209,6 +214,12 @@ export class Host extends Connection {
   drop(link) {
     this.links.delete(link.peer);
     link.close();
+  }
+
+  dropPeer(id) {
+    const link = this.links.get(id);
+    if (link) this.drop(link);
+    this.refreshStatus();
   }
 
   dropAll() {
